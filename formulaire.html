@@ -27,7 +27,7 @@
       box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
       padding: 2.5rem;
       width: 100%;
-      max-width: 480px;
+      max-width: 520px;
     }
 
     h1 {
@@ -54,22 +54,36 @@
       margin-bottom: 0.4rem;
     }
 
-    input {
+    input,
+    select {
       width: 100%;
       padding: 0.75rem 1rem;
       border: 2px solid #e0e0e0;
       border-radius: 8px;
       font-size: 1rem;
+      background: white;
       transition: border-color 0.2s;
     }
 
-    input:focus {
+    input:focus,
+    select:focus {
       outline: none;
       border-color: #667eea;
     }
 
-    input.invalid {
+    input.invalid,
+    .date-group.invalid select {
       border-color: #e53935;
+    }
+
+    .date-group {
+      display: grid;
+      grid-template-columns: 1fr 1.4fr 1.2fr;
+      gap: 0.5rem;
+    }
+
+    .date-group select {
+      padding: 0.75rem 0.5rem;
     }
 
     .error-msg {
@@ -138,21 +152,21 @@
       </div>
 
       <div class="field">
-        <label for="dateNaissance">Date de naissance</label>
-        <input type="date" id="dateNaissance" name="dateNaissance">
-        <span class="error-msg" id="err-dateNaissance">Ce champ est requis.</span>
+        <label>Date de naissance</label>
+        <div class="date-group" data-field="dateNaissance" data-year-start="1920"></div>
+        <span class="error-msg" id="err-dateNaissance">Veuillez sélectionner une date complète.</span>
       </div>
 
       <div class="field">
-        <label for="dateDepart">Date de départ</label>
-        <input type="date" id="dateDepart" name="dateDepart">
-        <span class="error-msg" id="err-dateDepart">Ce champ est requis.</span>
+        <label>Date de départ</label>
+        <div class="date-group" data-field="dateDepart" data-year-offset="-1" data-year-span="6"></div>
+        <span class="error-msg" id="err-dateDepart">Veuillez sélectionner une date complète.</span>
       </div>
 
       <div class="field">
-        <label for="dateRetour">Date de retour</label>
-        <input type="date" id="dateRetour" name="dateRetour">
-        <span class="error-msg" id="err-dateRetour">Ce champ est requis.</span>
+        <label>Date de retour</label>
+        <div class="date-group" data-field="dateRetour" data-year-offset="-1" data-year-span="6"></div>
+        <span class="error-msg" id="err-dateRetour">Veuillez sélectionner une date complète.</span>
       </div>
 
       <button type="button" id="downloadBtn" disabled>Télécharger les informations</button>
@@ -162,27 +176,106 @@
   </div>
 
   <script>
-    const fields = ["nom", "prenom", "dateNaissance", "dateDepart", "dateRetour"];
+    const textFields = ["nom", "prenom"];
+    const dateFields = ["dateNaissance", "dateDepart", "dateRetour"];
+    const allFields = [...textFields, ...dateFields];
     const downloadBtn = document.getElementById("downloadBtn");
     const statusEl = document.getElementById("status");
 
-    function formatDateFr(isoDate) {
-      const [year, month, day] = isoDate.split("-");
-      return `${day}/${month}/${year}`;
+    const MOIS = [
+      "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+      "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre",
+    ];
+
+    function createOption(value, label) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      return option;
+    }
+
+    function populateDateGroup(container) {
+      const yearStart = container.dataset.yearStart
+        ? Number(container.dataset.yearStart)
+        : null;
+      const yearOffset = Number(container.dataset.yearOffset || 0);
+      const yearSpan = Number(container.dataset.yearSpan || 0);
+      const currentYear = new Date().getFullYear();
+
+      let minYear;
+      let maxYear;
+
+      if (yearStart !== null) {
+        minYear = yearStart;
+        maxYear = currentYear;
+      } else {
+        minYear = currentYear + yearOffset;
+        maxYear = minYear + yearSpan;
+      }
+
+      const jour = document.createElement("select");
+      jour.className = "date-jour";
+      jour.setAttribute("aria-label", "Jour");
+      jour.appendChild(createOption("", "Jour"));
+      for (let d = 1; d <= 31; d++) {
+        jour.appendChild(createOption(String(d).padStart(2, "0"), String(d)));
+      }
+
+      const mois = document.createElement("select");
+      mois.className = "date-mois";
+      mois.setAttribute("aria-label", "Mois");
+      mois.appendChild(createOption("", "Mois"));
+      MOIS.forEach((name, index) => {
+        mois.appendChild(createOption(String(index + 1).padStart(2, "0"), name));
+      });
+
+      const annee = document.createElement("select");
+      annee.className = "date-annee";
+      annee.setAttribute("aria-label", "Année");
+      annee.appendChild(createOption("", "Année"));
+      for (let y = maxYear; y >= minYear; y--) {
+        annee.appendChild(createOption(String(y), String(y)));
+      }
+
+      container.append(jour, mois, annee);
+    }
+
+    document.querySelectorAll(".date-group").forEach(populateDateGroup);
+
+    function getDateValue(fieldId) {
+      const group = document.querySelector(`.date-group[data-field="${fieldId}"]`);
+      const jour = group.querySelector(".date-jour").value;
+      const mois = group.querySelector(".date-mois").value;
+      const annee = group.querySelector(".date-annee").value;
+      if (!jour || !mois || !annee) return "";
+      return `${jour}/${mois}/${annee}`;
+    }
+
+    function isTextFieldValid(id) {
+      return document.getElementById(id).value.trim() !== "";
+    }
+
+    function isDateFieldValid(fieldId) {
+      return getDateValue(fieldId) !== "";
     }
 
     function isFieldValid(id) {
-      const input = document.getElementById(id);
-      return input.value.trim() !== "";
+      if (textFields.includes(id)) return isTextFieldValid(id);
+      return isDateFieldValid(id);
     }
 
     function allFieldsValid() {
-      return fields.every(isFieldValid);
+      return allFields.every(isFieldValid);
+    }
+
+    function setDateGroupInvalid(fieldId, invalid) {
+      const group = document.querySelector(`.date-group[data-field="${fieldId}"]`);
+      group.classList.toggle("invalid", invalid);
     }
 
     function updateUI() {
-      const filled = fields.filter(isFieldValid).length;
-      const remaining = fields.length - filled;
+      const filled = allFields.filter(isFieldValid).length;
+      const remaining = allFields.length - filled;
 
       downloadBtn.disabled = !allFieldsValid();
 
@@ -197,23 +290,42 @@
       }
     }
 
-    fields.forEach((id) => {
-      const input = document.getElementById(id);
-      input.addEventListener("input", () => {
-        input.classList.remove("invalid");
+    textFields.forEach((id) => {
+      document.getElementById(id).addEventListener("input", () => {
+        document.getElementById(id).classList.remove("invalid");
         document.getElementById("err-" + id).classList.remove("visible");
         updateUI();
+      });
+    });
+
+    dateFields.forEach((id) => {
+      const group = document.querySelector(`.date-group[data-field="${id}"]`);
+      group.querySelectorAll("select").forEach((select) => {
+        select.addEventListener("change", () => {
+          setDateGroupInvalid(id, false);
+          document.getElementById("err-" + id).classList.remove("visible");
+          updateUI();
+        });
       });
     });
 
     downloadBtn.addEventListener("click", () => {
       let hasError = false;
 
-      fields.forEach((id) => {
+      textFields.forEach((id) => {
         const input = document.getElementById(id);
         const errEl = document.getElementById("err-" + id);
-        if (!isFieldValid(id)) {
+        if (!isTextFieldValid(id)) {
           input.classList.add("invalid");
+          errEl.classList.add("visible");
+          hasError = true;
+        }
+      });
+
+      dateFields.forEach((id) => {
+        const errEl = document.getElementById("err-" + id);
+        if (!isDateFieldValid(id)) {
+          setDateGroupInvalid(id, true);
           errEl.classList.add("visible");
           hasError = true;
         }
@@ -224,9 +336,9 @@
       const data = {
         nom: document.getElementById("nom").value.trim(),
         prenom: document.getElementById("prenom").value.trim(),
-        dateNaissance: formatDateFr(document.getElementById("dateNaissance").value),
-        dateDepart: formatDateFr(document.getElementById("dateDepart").value),
-        dateRetour: formatDateFr(document.getElementById("dateRetour").value),
+        dateNaissance: getDateValue("dateNaissance"),
+        dateDepart: getDateValue("dateDepart"),
+        dateRetour: getDateValue("dateRetour"),
       };
 
       const content = [
