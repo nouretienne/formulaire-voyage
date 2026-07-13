@@ -411,7 +411,7 @@
     <div class="followup-box hidden" id="followupBox">
       <p id="followupText">Complétons les informations manquantes…</p>
       <button type="button" id="answerBtn" disabled>Maintenez pour répondre</button>
-      <p class="ptt-hint hidden" id="pttHint">Appuyez, parlez, relâchez pour envoyer</p>
+      <p class="ptt-hint hidden" id="pttHint">Maintenez le bouton bleu, parlez, relâchez — ou tapez la réponse dans le champ vert puis Valider</p>
       <div class="followup-manual" id="followupManualWrap">
         <input type="text" id="followupManual" placeholder="Ex : 5 septembre 2026" autocomplete="off">
         <button type="button" id="followupManualBtn">Valider</button>
@@ -511,6 +511,14 @@
       septembre: "09", octobre: "10", novembre: "11", decembre: "12", décembre: "12",
     };
 
+    const NOMBRES_FR = {
+      un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, six: 6, sept: 7, huit: 8,
+      neuf: 9, dix: 10, onze: 11, douze: 12, treize: 13, quatorze: 14, quinze: 15,
+      seize: 16, dixsept: 17, "dix-sept": 17, dixhuit: 18, "dix-huit": 18,
+      dixneuf: 19, "dix-neuf": 19, vingt: 20, trente: 30, trenteetun: 31, "trente et un": 31,
+      premier: 1, "1er": 1,
+    };
+
     const formData = {};
     let followUpField = null;
     let followUpRecognition = null;
@@ -519,6 +527,9 @@
     let pushToTalkActive = false;
     let pushToTalkTranscript = "";
     let followUpStream = null;
+    let followUpRecorder = null;
+    let followUpChunks = [];
+    let isSubmittingFollowUp = false;
     let lastUpdatedField = null;
 
     const VIRTUAL_MIC_RE = /mixage|st[eé]r[eé]o mix|what u hear|loopback|wave out|sortie audio|output mix/i;
@@ -650,6 +661,20 @@
       return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
     }
 
+    function wordsToDay(str) {
+      const cleaned = str.toLowerCase().replace(/\s+/g, " ").trim();
+      if (/^\d{1,2}$/.test(cleaned)) return parseInt(cleaned, 10);
+      const compact = cleaned.replace(/\s+/g, "");
+      if (NOMBRES_FR[cleaned] || NOMBRES_FR[compact]) {
+        return NOMBRES_FR[cleaned] || NOMBRES_FR[compact];
+      }
+      const vingt = cleaned.match(/^vingt(?:\s*[- ]?(\w+))?$/);
+      if (vingt) return 20 + (vingt[1] ? (NOMBRES_FR[vingt[1]] || 0) : 0);
+      const trente = cleaned.match(/^trente(?:\s*[- ]?(\w+))?$/);
+      if (trente) return 30 + (trente[1] ? (NOMBRES_FR[trente[1]] || 0) : 0);
+      return null;
+    }
+
     function parseDate(str) {
       if (!str) return null;
       const t = str.toLowerCase()
@@ -662,8 +687,13 @@
       const num = t.match(/(\d{1,2})[\/\-\.\s](\d{1,2})[\/\-\.\s](\d{4})/);
       if (num) return `${num[1].padStart(2, "0")}/${num[2].padStart(2, "0")}/${num[3]}`;
 
-      const wrd = t.match(/(\d{1,2})\s+([a-zéûôîàèêù]+)\s+(\d{4})/);
-      if (wrd && MOIS[wrd[2]]) return `${wrd[1].padStart(2, "0")}/${MOIS[wrd[2]]}/${wrd[3]}`;
+      const wrd = t.match(/(\d{1,2}|[a-zéûôîàèêù\-]+)\s+([a-zéûôîàèêù]+)\s+(\d{4})/);
+      if (wrd && MOIS[wrd[2]]) {
+        const day = wordsToDay(wrd[1]);
+        if (day >= 1 && day <= 31) {
+          return `${String(day).padStart(2, "0")}/${MOIS[wrd[2]]}/${wrd[3]}`;
+        }
+      }
 
       return null;
     }
@@ -715,6 +745,9 @@
       if (!field || !raw) return null;
       const cleaned = normalizeAnswer(raw);
       if (!cleaned) return null;
+
+      const fromFull = extractFromTranscript(cleaned)[fieldId];
+      if (fromFull) return fromFull;
 
       if (field.type === "text") {
         const val = cleaned.replace(/^(je m'appelle|c'est|mon nom est|mon prénom est)\s+/i, "")
@@ -769,10 +802,85 @@
     }
 
     function stopFollowUpStream() {
+      if (followUpRecorder && followUpRecorder.state !== "inactive") {
+        try { followUpRecorder.stop(); } catch { /* ignore */ }
+      }
+      followUpRecorder = null;
+      followUpChunks = [];
       if (followUpStream) {
         followUpStream.getTracks().forEach((t) => t.stop());
         followUpStream = null;
       }
+    }
+
+    function finishFollowUpRecognition() {
+      return new Promise((resolve) => {
+        if (!followUpRecognition) {
+          resolve(pushToTalkTranscript.trim());
+          return;
+        }
+
+        const done = () => {
+          const text = pushToTalkTranscript.trim();
+          followUpRecognition = null;
+          resolve(text);
+        };
+
+        const timeout = setTimeout(done, 2500);
+        followUpRecognition.onend = () => {
+          clearTimeout(timeout);
+          done();
+        };
+
+        try {
+          followUpRecognition.stop();
+        } catch {
+          clearTimeout(timeout);
+          done();
+        }
+      });
+    }
+
+    async function transcribeFollowUpRecording() {
+      if (!followUpRecorder || followUpRecorder.state === "inactive") {
+        stopFollowUpStream();
+        return "";
+      }
+
+      const mimeType = followUpRecorder.mimeType || "audio/webm";
+      const blob = await new Promise((resolve) => {
+        followUpRecorder.onstop = () => {
+          if (followUpChunks.length === 0) {
+            resolve(null);
+            return;
+          }
+          resolve(new Blob(followUpChunks, { type: mimeType }));
+        };
+        try { followUpRecorder.requestData(); } catch { /* ignore */ }
+        followUpRecorder.stop();
+      });
+
+      stopFollowUpStream();
+
+      if (!blob || blob.size < 300) return "";
+
+      try {
+        const audioBuffer = await decodeBlob(blob);
+        const wav = encodeWav(audioBuffer);
+        let samples = await to16kHz(audioBuffer);
+        samples = amplify(samples);
+
+        const engine = engineSelect.value;
+        if (engine === "openai") return (await transcribeWithOpenAI(wav)).trim();
+        if (engine === "wispr") return (await transcribeWithWispr(wav)).trim();
+        if (isLocalEngine()) {
+          await prepareModel();
+          return (await transcribeWithLocal(samples)).trim();
+        }
+      } catch (e) {
+        console.warn("Transcription complément:", e);
+      }
+      return "";
     }
 
     function listenForAnswer() {
@@ -818,47 +926,67 @@
 
     async function startPushToTalk(e) {
       if (e) e.preventDefault();
-      if (isSpeaking || !followUpField || pushToTalkActive || answerBtn.disabled) return;
-
-      try {
-        const deviceId = micSelect.value ? { exact: micSelect.value } : undefined;
-        followUpStream = await navigator.mediaDevices.getUserMedia({
-          audio: { deviceId, echoCancellation: false, noiseSuppression: false, autoGainControl: true },
-        });
-      } catch {
-        setStatus("Micro indisponible — utilisez le champ texte");
-        return;
-      }
+      if (isSpeaking || !followUpField || pushToTalkActive || answerBtn.disabled || isSubmittingFollowUp) return;
 
       pushToTalkActive = true;
       pushToTalkTranscript = "";
       followupManual.value = "";
       answerBtn.classList.add("recording");
       answerBtn.textContent = "Parlez… relâchez pour envoyer";
-      listenForAnswer();
+
+      if (isBrowserEngine()) {
+        listenForAnswer();
+        return;
+      }
+
+      try {
+        const deviceId = micSelect.value ? { exact: micSelect.value } : undefined;
+        followUpStream = await navigator.mediaDevices.getUserMedia({
+          audio: { deviceId, echoCancellation: false, noiseSuppression: false, autoGainControl: true },
+        });
+        followUpChunks = [];
+        const mime = getMimeType();
+        followUpRecorder = mime
+          ? new MediaRecorder(followUpStream, { mimeType: mime })
+          : new MediaRecorder(followUpStream);
+        followUpRecorder.ondataavailable = (ev) => {
+          if (ev.data.size > 0) followUpChunks.push(ev.data);
+        };
+        followUpRecorder.start(200);
+        setStatus("Enregistrement… relâchez pour envoyer", "listening");
+      } catch {
+        pushToTalkActive = false;
+        answerBtn.classList.remove("recording");
+        answerBtn.textContent = "Maintenez pour répondre";
+        setStatus("Micro indisponible — utilisez le champ texte");
+      }
     }
 
-    function stopPushToTalk() {
-      if (!pushToTalkActive) return;
+    async function stopPushToTalk() {
+      if (!pushToTalkActive || isSubmittingFollowUp) return;
       pushToTalkActive = false;
       answerBtn.classList.remove("recording");
       answerBtn.textContent = "Maintenez pour répondre";
+      answerBtn.disabled = true;
 
-      if (followUpRecognition) {
-        followUpRecognition.onend = null;
-        try { followUpRecognition.stop(); } catch { /* ignore */ }
-        followUpRecognition = null;
+      let captured = "";
+      if (isBrowserEngine()) {
+        captured = await finishFollowUpRecognition();
+      } else {
+        setStatus("Transcription de votre réponse…");
+        captured = await transcribeFollowUpRecording();
       }
-      stopFollowUpStream();
 
-      const captured = pushToTalkTranscript || followupManual.value.trim();
-      setTimeout(() => submitFollowUpAnswer(captured), 400);
+      if (!captured) captured = followupManual.value.trim();
+      followupManual.value = captured;
+      await submitFollowUpAnswer(captured);
     }
 
     async function submitFollowUpAnswer(raw) {
       const fieldId = followUpField;
-      if (!fieldId) return;
+      if (!fieldId || isSubmittingFollowUp) return;
 
+      isSubmittingFollowUp = true;
       const field = FORM_FIELDS.find((f) => f.id === fieldId);
       const cleaned = normalizeAnswer(raw || "");
 
@@ -866,6 +994,7 @@
         followupText.textContent = "Réponse vide — maintenez le bouton ou tapez dans le champ vert.";
         setStatus("En attente de réponse");
         answerBtn.disabled = false;
+        isSubmittingFollowUp = false;
         return;
       }
 
@@ -879,6 +1008,7 @@
         followupText.textContent = `Non reconnu : « ${cleaned} » — corrigez le champ vert et cliquez Valider.`;
         setStatus("Corrigez la réponse dans le champ vert");
         answerBtn.disabled = false;
+        isSubmittingFollowUp = false;
         followupManual.focus();
         return;
       }
@@ -889,6 +1019,7 @@
       setStatus(`${field.label} enregistré ✓`);
 
       await speak("Merci, c'est noté.");
+      isSubmittingFollowUp = false;
       await startFollowUp();
     }
 
@@ -918,9 +1049,19 @@
     async function startFollowUp() {
       const missing = missingFields();
       if (missing.length === 0) {
-        isFollowUpActive = false;
-        followupBox.classList.add("hidden");
-        pttHint.classList.add("hidden");
+      isFollowUpActive = false;
+      followUpField = null;
+      pushToTalkActive = false;
+      isSubmittingFollowUp = false;
+      if (followUpRecognition) {
+        followUpRecognition.onend = null;
+        try { followUpRecognition.stop(); } catch { /* ignore */ }
+        followUpRecognition = null;
+      }
+      stopFollowUpStream();
+      followupBox.classList.add("hidden");
+      pttHint.classList.add("hidden");
+      followupManualWrap.classList.remove("visible");
         followupManualWrap.classList.remove("visible");
         await speak("Parfait, toutes les informations sont complètes. Vous pouvez consulter le formulaire.");
         setStatus("Dossier complet ✓");
@@ -1272,8 +1413,18 @@
       lastWavBlob = null;
       Object.keys(formData).forEach((k) => delete formData[k]);
       isFollowUpActive = false;
+      followUpField = null;
+      pushToTalkActive = false;
+      isSubmittingFollowUp = false;
+      if (followUpRecognition) {
+        followUpRecognition.onend = null;
+        try { followUpRecognition.stop(); } catch { /* ignore */ }
+        followUpRecognition = null;
+      }
+      stopFollowUpStream();
       followupBox.classList.add("hidden");
       pttHint.classList.add("hidden");
+      followupManualWrap.classList.remove("visible");
       dossierSection.classList.add("hidden");
       peakVolume = 0;
       if (audioPlayer.src) URL.revokeObjectURL(audioPlayer.src);
@@ -1548,10 +1699,18 @@
       localStorage.removeItem(STORAGE_KEY);
       isFollowUpActive = false;
       followUpField = null;
+      pushToTalkActive = false;
+      isSubmittingFollowUp = false;
       followupBox.classList.add("hidden");
       pttHint.classList.add("hidden");
+      followupManualWrap.classList.remove("visible");
       dossierSection.classList.add("hidden");
-      if (followUpRecognition) try { followUpRecognition.stop(); } catch { /* ignore */ }
+      if (followUpRecognition) {
+        followUpRecognition.onend = null;
+        try { followUpRecognition.stop(); } catch { /* ignore */ }
+        followUpRecognition = null;
+      }
+      stopFollowUpStream();
       if (audioPlayer.src) URL.revokeObjectURL(audioPlayer.src);
       audioPlayer.removeAttribute("src");
       audioSection.classList.add("hidden");
