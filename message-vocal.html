@@ -427,7 +427,7 @@
     </div>
 
     <p class="warning" id="browserWarning">
-      La page est prête immédiatement. Utilisez le mode « Instantané » pour tester sans attente.
+      Version 2026-07-13c — La page est prête immédiatement. Utilisez le mode « Instantané » pour tester sans attente.
     </p>
   </div>
 
@@ -486,6 +486,7 @@
     const browserWarning = document.getElementById("browserWarning");
 
     const STORAGE_KEY = "voyageFormData";
+    const APP_VERSION = "2026-07-13c";
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const hasVoiceQA = Boolean(SpeechRecognition && window.speechSynthesis);
 
@@ -712,10 +713,93 @@
     const DATE_IN_TEXT =
       String.raw`(\d{1,2}\s+[a-zéûôîàèêù]+\s+\d{4}|\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4})`;
 
+    const RETOUR_HINTS = [
+      /\bretour\b/,
+      /\breviens?\b/,
+      /\brevenir\b/,
+      /\brentre\b/,
+      /\brentrer\b/,
+      /\brentrons\b/,
+      /\brevenons\b/,
+      /\brentrerai\b/,
+      /\b(?:de|des|du)\s+vacances\b/,
+    ];
+
+    const DEPART_HINTS = [
+      /\bd[eé]part\b/,
+      /\bpars\b/,
+      /\bpartir\b/,
+      /\bpartons\b/,
+      /\bpartirai\b/,
+      /\bsouhaite\s+partir\b/,
+      /\bpartir\s+en\s+vacances\b/,
+      /\bpars\s+en\s+vacances\b/,
+      /\bva\s+partir\b/,
+      /\ben\s+vacances\b/,
+    ];
+
+    const BIRTH_HINTS = [
+      /\bn[eé]e?\b/,
+      /\bnaissance\b/,
+      /\bje\s+suis\s+n/,
+    ];
+
+    function normalizeTranscriptForExtraction(text) {
+      return text
+        .replace(/[''`´]/g, "'")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase()
+        .replace(/\brentre\s+deux\s+vacances\b/g, "rentre de vacances")
+        .replace(/\breviens\s+deux\s+vacances\b/g, "reviens de vacances")
+        .replace(/\brentrer\s+deux\s+vacances\b/g, "rentrer de vacances")
+        .replace(/\bpartir\s+deux\s+vacances\b/g, "partir en vacances")
+        .replace(/\bpars\s+deux\s+vacances\b/g, "pars en vacances");
+    }
+
+    function scoreContext(context, hints) {
+      let score = 0;
+      for (const hint of hints) {
+        if (hint.test(context)) score += 2;
+      }
+      return score;
+    }
+
+    function extractTravelDates(lower) {
+      const dates = [];
+      const re = new RegExp(DATE_IN_TEXT, "gi");
+      let match;
+
+      while ((match = re.exec(lower)) !== null) {
+        const parsed = parseDate(match[1]);
+        if (!parsed) continue;
+
+        const immediateBefore = lower.slice(Math.max(0, match.index - 30), match.index);
+        if (scoreContext(immediateBefore, BIRTH_HINTS) >= 2) continue;
+
+        let retourScore = scoreContext(immediateBefore, RETOUR_HINTS);
+        let departScore = scoreContext(immediateBefore, DEPART_HINTS);
+
+        if (/\b(?:rentre|reviens|rentrer|revenir|retour)\b/.test(immediateBefore)) {
+          retourScore += 6;
+          departScore = Math.max(0, departScore - 4);
+        }
+
+        if (/\b(?:pars|partir|d[eé]part|souhaite\s+partir)\b/.test(immediateBefore)) {
+          departScore += 6;
+          retourScore = Math.max(0, retourScore - 2);
+        }
+
+        dates.push({ parsed, index: match.index, retourScore, departScore });
+      }
+
+      return dates;
+    }
+
     function extractFromTranscript(text) {
       const extracted = {};
-      const norm = text.replace(/['']/g, "'").replace(/\s+/g, " ").trim();
-      const lower = norm.toLowerCase();
+      const norm = text.replace(/[''`´]/g, "'").replace(/\s+/g, " ").trim();
+      const lower = normalizeTranscriptForExtraction(text);
 
       const nameMatch = norm.match(
         /(?:je m'appelle|mon nom est)\s+([A-Za-zÀ-ÿ\-]+)\s+([A-Za-zÀ-ÿ\-]+)/i
@@ -730,16 +814,23 @@
       );
       if (birthMatch) extracted.dateNaissance = parseDate(birthMatch[1]);
 
-      // Retour avant départ : « reviens de vacances » ne doit pas être pris pour un départ
-      const retourMatch = lower.match(
-        new RegExp(String.raw`(?:(?:date\s+de\s+)?retour|(?:je\s+)?(?:reviens|revient|revenir|rentre|rentrer|rentrons|rentrerai|revenons))(?:\s+de\s+vacances)?[^.\d]{0,40}?(?:le\s+)?${DATE_IN_TEXT}`)
-      );
-      if (retourMatch) extracted.dateRetour = parseDate(retourMatch[1]);
-
-      const departMatch = lower.match(
-        new RegExp(String.raw`(?:(?:date\s+de\s+)?d[eé]part|partir\s+en\s+vacances|pars\s+en\s+vacances|souhaite\s+partir|(?:je\s+)?(?:pars|partir|partirai|partons))[^.\d]{0,40}?(?:le\s+)?${DATE_IN_TEXT}`)
-      );
-      if (departMatch) extracted.dateDepart = parseDate(departMatch[1]);
+      const travelDates = extractTravelDates(lower);
+      for (const entry of travelDates) {
+        if (
+          entry.retourScore >= 3
+          && entry.retourScore > entry.departScore
+          && !extracted.dateRetour
+        ) {
+          extracted.dateRetour = entry.parsed;
+        }
+        if (
+          entry.departScore >= 3
+          && entry.departScore > entry.retourScore
+          && !extracted.dateDepart
+        ) {
+          extracted.dateDepart = entry.parsed;
+        }
+      }
 
       return extracted;
     }
@@ -1720,7 +1811,7 @@
       audioSection.classList.add("hidden");
       timerEl.classList.add("hidden");
       browserWarning.hidden = false;
-      browserWarning.textContent = "La page est prête immédiatement. Utilisez le mode « Instantané » pour tester sans attente.";
+      browserWarning.textContent = "Version " + APP_VERSION + " — La page est prête immédiatement. Utilisez le mode « Instantané » pour tester sans attente.";
       setStatus("Prêt — décrivez votre voyage à voix haute");
       updateButtons();
     });
