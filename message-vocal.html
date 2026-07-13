@@ -277,6 +277,49 @@
       font-weight: 600;
     }
 
+    .followup-manual {
+      margin-top: 0.75rem;
+      display: none;
+      gap: 0.5rem;
+    }
+
+    .followup-manual.visible {
+      display: flex;
+    }
+
+    .followup-manual input {
+      flex: 1;
+      padding: 0.65rem 0.75rem;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 0.9rem;
+    }
+
+    .followup-manual input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    #followupManualBtn {
+      padding: 0.65rem 1rem;
+      border: none;
+      border-radius: 8px;
+      background: #43a047;
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .dossier-row.just-updated {
+      animation: flashGreen 1.2s ease;
+    }
+
+    @keyframes flashGreen {
+      0% { background: #c8e6c9; }
+      100% { background: #f1f8f2; }
+    }
+
     #finishFormBtn {
       background: #43a047;
       color: white;
@@ -369,6 +412,10 @@
       <p id="followupText">Complétons les informations manquantes…</p>
       <button type="button" id="answerBtn" disabled>Maintenez pour répondre</button>
       <p class="ptt-hint hidden" id="pttHint">Appuyez, parlez, relâchez pour envoyer</p>
+      <div class="followup-manual" id="followupManualWrap">
+        <input type="text" id="followupManual" placeholder="Ex : 5 septembre 2026" autocomplete="off">
+        <button type="button" id="followupManualBtn">Valider</button>
+      </div>
     </div>
 
     <div class="actions">
@@ -432,6 +479,9 @@
     const followupText = document.getElementById("followupText");
     const answerBtn = document.getElementById("answerBtn");
     const pttHint = document.getElementById("pttHint");
+    const followupManual = document.getElementById("followupManual");
+    const followupManualBtn = document.getElementById("followupManualBtn");
+    const followupManualWrap = document.getElementById("followupManualWrap");
     const micHint = document.getElementById("micHint");
     const browserWarning = document.getElementById("browserWarning");
 
@@ -468,6 +518,8 @@
     let isSpeaking = false;
     let pushToTalkActive = false;
     let pushToTalkTranscript = "";
+    let followUpStream = null;
+    let lastUpdatedField = null;
 
     const VIRTUAL_MIC_RE = /mixage|st[eé]r[eé]o mix|what u hear|loopback|wave out|sortie audio|output mix/i;
 
@@ -562,14 +614,32 @@
       dossierSection.classList.remove("hidden");
       dossierGrid.innerHTML = FORM_FIELDS.map((f) => {
         const val = formData[f.id];
-        return `<div class="dossier-row ${val ? "ok" : "missing"}">
+        const justUpdated = f.id === lastUpdatedField ? " just-updated" : "";
+        return `<div class="dossier-row ${val ? "ok" : "missing"}${justUpdated}" data-field="${f.id}">
           <span class="dossier-label">${f.label}</span>
           <span class="dossier-value ${val ? "" : "empty"}">${
             f.type === "date" ? formatDateDisplay(val) : (val || "Manquant")
           }</span>
         </div>`;
       }).join("");
+      if (lastUpdatedField) {
+        setTimeout(() => { lastUpdatedField = null; }, 1500);
+      }
       updateButtons();
+    }
+
+    function applyFieldValue(fieldId, value) {
+      if (!fieldId || !value) return false;
+      formData[fieldId] = String(value);
+      lastUpdatedField = fieldId;
+      saveFormData();
+      renderDossier();
+      dossierSection.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      return true;
+    }
+
+    function normalizeAnswer(raw) {
+      return raw.trim().replace(/[.,!?;:]+$/g, "").trim();
     }
 
     function missingFields() {
@@ -642,8 +712,9 @@
 
     function validateAnswer(fieldId, raw) {
       const field = FORM_FIELDS.find((f) => f.id === fieldId);
-      if (!field || !raw || raw.trim().length < 1) return null;
-      const cleaned = raw.trim();
+      if (!field || !raw) return null;
+      const cleaned = normalizeAnswer(raw);
+      if (!cleaned) return null;
 
       if (field.type === "text") {
         const val = cleaned.replace(/^(je m'appelle|c'est|mon nom est|mon prénom est)\s+/i, "")
@@ -656,10 +727,7 @@
       }
 
       let date = extractDateFromAnswer(cleaned);
-      if (!date) {
-        const extracted = extractFromTranscript(cleaned);
-        date = extracted[fieldId] || null;
-      }
+      if (!date) date = parseDate(cleaned);
       if (!date) return null;
 
       if (fieldId === "dateRetour" && formData.dateDepart) {
@@ -700,6 +768,13 @@
       return VIRTUAL_MIC_RE.test(label || "");
     }
 
+    function stopFollowUpStream() {
+      if (followUpStream) {
+        followUpStream.getTracks().forEach((t) => t.stop());
+        followUpStream = null;
+      }
+    }
+
     function listenForAnswer() {
       if (!hasVoiceQA || !followUpField || pushToTalkActive) return;
 
@@ -709,16 +784,13 @@
       followUpRecognition.interimResults = true;
       followUpRecognition.continuous = true;
 
-      followUpRecognition.onstart = () => {
-        setStatus("Enregistrement… relâchez pour envoyer", "listening");
-      };
-
       followUpRecognition.onresult = (e) => {
         let text = "";
         for (let i = 0; i < e.results.length; i++) {
           text += e.results[i][0].transcript;
         }
-        pushToTalkTranscript = text.trim();
+        pushToTalkTranscript = normalizeAnswer(text);
+        followupManual.value = pushToTalkTranscript;
         if (pushToTalkTranscript) {
           followupText.textContent = `En cours : « ${pushToTalkTranscript} »`;
         }
@@ -726,20 +798,44 @@
 
       followUpRecognition.onerror = (e) => {
         if (e.error !== "aborted" && e.error !== "no-speech") {
-          setStatus("Erreur micro — réessayez");
+          setStatus("Erreur micro — utilisez le champ texte ci-dessous");
         }
       };
 
       followUpRecognition.onend = () => {
-        if (pushToTalkActive) {
+        if (pushToTalkActive && followUpRecognition) {
           try { followUpRecognition.start(); } catch { /* ignore */ }
         }
       };
 
-      try { followUpRecognition.start(); } catch {
-        setStatus("Micro indisponible");
-        stopPushToTalk();
+      try {
+        followUpRecognition.start();
+        setStatus("Enregistrement… relâchez pour envoyer", "listening");
+      } catch {
+        setStatus("Parlez puis validez dans le champ texte");
       }
+    }
+
+    async function startPushToTalk(e) {
+      if (e) e.preventDefault();
+      if (isSpeaking || !followUpField || pushToTalkActive || answerBtn.disabled) return;
+
+      try {
+        const deviceId = micSelect.value ? { exact: micSelect.value } : undefined;
+        followUpStream = await navigator.mediaDevices.getUserMedia({
+          audio: { deviceId, echoCancellation: false, noiseSuppression: false, autoGainControl: true },
+        });
+      } catch {
+        setStatus("Micro indisponible — utilisez le champ texte");
+        return;
+      }
+
+      pushToTalkActive = true;
+      pushToTalkTranscript = "";
+      followupManual.value = "";
+      answerBtn.classList.add("recording");
+      answerBtn.textContent = "Parlez… relâchez pour envoyer";
+      listenForAnswer();
     }
 
     function stopPushToTalk() {
@@ -753,65 +849,68 @@
         try { followUpRecognition.stop(); } catch { /* ignore */ }
         followUpRecognition = null;
       }
+      stopFollowUpStream();
 
-      setStatus("Analyse de votre réponse…");
-      setTimeout(() => processPushToTalkAnswer(pushToTalkTranscript), 500);
+      const captured = pushToTalkTranscript || followupManual.value.trim();
+      setTimeout(() => submitFollowUpAnswer(captured), 400);
     }
 
-    async function processPushToTalkAnswer(raw) {
-      if (!followUpField) return;
+    async function submitFollowUpAnswer(raw) {
+      const fieldId = followUpField;
+      if (!fieldId) return;
 
-      const field = FORM_FIELDS.find((f) => f.id === followUpField);
+      const field = FORM_FIELDS.find((f) => f.id === fieldId);
+      const cleaned = normalizeAnswer(raw || "");
 
-      if (!raw || raw.length < 1) {
-        followupText.textContent = "Aucune réponse détectée. Maintenez le bouton et parlez.";
-        setStatus("Aucune réponse — maintenez le bouton et parlez");
+      if (!cleaned) {
+        followupText.textContent = "Réponse vide — maintenez le bouton ou tapez dans le champ vert.";
+        setStatus("En attente de réponse");
         answerBtn.disabled = false;
         return;
       }
 
-      followupText.textContent = `Vous avez dit : « ${raw} »`;
+      followupManual.value = cleaned;
+      followupText.textContent = `Analyse : « ${cleaned} »`;
       setStatus("Analyse de votre réponse…");
-      const value = validateAnswer(followUpField, raw);
+
+      const value = validateAnswer(fieldId, cleaned);
 
       if (!value) {
-        followupText.textContent = `Je n'ai pas reconnu « ${raw} ». Maintenez le bouton et réessayez.`;
-        await speak("Je n'ai pas bien compris. " + FOLLOWUP_QUESTIONS[followUpField]);
-        setStatus("Maintenez le bouton pour répondre à nouveau");
+        followupText.textContent = `Non reconnu : « ${cleaned} » — corrigez le champ vert et cliquez Valider.`;
+        setStatus("Corrigez la réponse dans le champ vert");
         answerBtn.disabled = false;
+        followupManual.focus();
         return;
       }
 
-      formData[followUpField] = value;
-      saveFormData();
-      renderDossier();
-
+      applyFieldValue(fieldId, value);
       const display = field.type === "date" ? formatDateDisplay(value) : value;
-      followupText.textContent = `✓ ${field.label} enregistré : ${display}`;
-      dossierSection.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      followupText.textContent = `✓ ${field.label} : ${display}`;
+      setStatus(`${field.label} enregistré ✓`);
 
-      await speak("Merci, " + field.label.toLowerCase() + " : " + display + ". C'est noté.");
+      await speak("Merci, c'est noté.");
       await startFollowUp();
     }
 
-    function startPushToTalk(e) {
-      if (e) e.preventDefault();
-      if (isSpeaking || !followUpField || pushToTalkActive || answerBtn.disabled) return;
-      pushToTalkActive = true;
-      answerBtn.classList.add("recording");
-      answerBtn.textContent = "Parlez… relâchez pour envoyer";
-      listenForAnswer();
+    function startPushToTalkMouse(e) {
+      startPushToTalk(e);
     }
 
     async function askForField(fieldId) {
       followUpField = fieldId;
+      const field = FORM_FIELDS.find((f) => f.id === fieldId);
       const question = FOLLOWUP_QUESTIONS[fieldId];
       followupBox.classList.remove("hidden");
       pttHint.classList.remove("hidden");
-      followupText.textContent = "Il manque une information : " + question;
-      setStatus("Question vocale en cours…", "listening");
+      followupManualWrap.classList.add("visible");
+      followupManual.value = "";
+      followupManual.placeholder = field.type === "date"
+        ? "Ex : 5 septembre 2026"
+        : `Votre ${field.label.toLowerCase()}`;
+      followupText.textContent = "Il manque : " + question;
+      setStatus("Question vocale…", "listening");
       await speak(question);
-      setStatus("Maintenez le bouton pour répondre");
+      setStatus("Maintenez le bouton ou tapez dans le champ vert");
       answerBtn.disabled = false;
       answerBtn.textContent = "Maintenez pour répondre";
     }
@@ -822,6 +921,7 @@
         isFollowUpActive = false;
         followupBox.classList.add("hidden");
         pttHint.classList.add("hidden");
+        followupManualWrap.classList.remove("visible");
         await speak("Parfait, toutes les informations sont complètes. Vous pouvez consulter le formulaire.");
         setStatus("Dossier complet ✓");
         updateButtons();
@@ -1395,12 +1495,17 @@
       }
     });
 
-    answerBtn.addEventListener("mousedown", startPushToTalk);
+    answerBtn.addEventListener("mousedown", startPushToTalkMouse);
     answerBtn.addEventListener("mouseup", stopPushToTalk);
     answerBtn.addEventListener("mouseleave", stopPushToTalk);
-    answerBtn.addEventListener("touchstart", startPushToTalk, { passive: false });
+    answerBtn.addEventListener("touchstart", startPushToTalkMouse, { passive: false });
     answerBtn.addEventListener("touchend", (e) => { e.preventDefault(); stopPushToTalk(); });
     answerBtn.addEventListener("touchcancel", stopPushToTalk);
+
+    followupManualBtn.addEventListener("click", () => submitFollowUpAnswer(followupManual.value));
+    followupManual.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") submitFollowUpAnswer(followupManual.value);
+    });
 
     micSelect.addEventListener("change", () => {
       localStorage.setItem("selectedMic", micSelect.value);
