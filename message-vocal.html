@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Message vocal — Transcription</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    .container {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+      padding: 2.5rem;
+      width: 100%;
+      max-width: 560px;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      color: #1a1a2e;
+      margin-bottom: 0.5rem;
+    }
+
+    .subtitle {
+      color: #666;
+      font-size: 0.9rem;
+      margin-bottom: 2rem;
+      line-height: 1.5;
+    }
+
+    .recorder {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    .mic-btn {
+      width: 96px;
+      height: 96px;
+      border-radius: 50%;
+      border: none;
+      background: #11998e;
+      color: white;
+      font-size: 2rem;
+      cursor: pointer;
+      transition: transform 0.2s, background 0.2s, box-shadow 0.2s;
+      box-shadow: 0 8px 24px rgba(17, 153, 142, 0.35);
+    }
+
+    .mic-btn:hover:not(:disabled) {
+      transform: scale(1.05);
+      background: #0e8579;
+    }
+
+    .mic-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .mic-btn.recording {
+      background: #e53935;
+      animation: pulse 1.2s infinite;
+      box-shadow: 0 8px 24px rgba(229, 57, 53, 0.4);
+    }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.08); }
+    }
+
+    .status-line {
+      margin-top: 1rem;
+      font-size: 0.9rem;
+      color: #666;
+      min-height: 1.4rem;
+    }
+
+    .status-line.active {
+      color: #e53935;
+      font-weight: 600;
+    }
+
+    .timer {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #1a1a2e;
+      margin-top: 0.5rem;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .section {
+      margin-bottom: 1.5rem;
+    }
+
+    .section-title {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 0.5rem;
+    }
+
+    .transcript-box {
+      width: 100%;
+      min-height: 140px;
+      padding: 1rem;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 1rem;
+      line-height: 1.6;
+      resize: vertical;
+      color: #333;
+    }
+
+    .transcript-box:focus {
+      outline: none;
+      border-color: #11998e;
+    }
+
+    .transcript-box::placeholder {
+      color: #aaa;
+    }
+
+    .interim {
+      color: #888;
+      font-style: italic;
+    }
+
+    audio {
+      width: 100%;
+      margin-top: 0.25rem;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+
+    button.action {
+      padding: 0.75rem;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, opacity 0.2s;
+    }
+
+    button.action:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    #copyBtn {
+      background: #11998e;
+      color: white;
+    }
+
+    #copyBtn:hover:not(:disabled) {
+      background: #0e8579;
+    }
+
+    #downloadBtn {
+      background: #f0f0f0;
+      color: #333;
+    }
+
+    #downloadBtn:hover:not(:disabled) {
+      background: #e4e4e4;
+    }
+
+    #clearBtn {
+      grid-column: 1 / -1;
+      background: transparent;
+      color: #888;
+      border: 2px solid #e0e0e0;
+    }
+
+    #clearBtn:hover:not(:disabled) {
+      background: #fafafa;
+      color: #333;
+    }
+
+    .warning {
+      margin-top: 1.5rem;
+      padding: 0.75rem 1rem;
+      background: #fff8e1;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      color: #795548;
+      line-height: 1.5;
+    }
+
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Message vocal</h1>
+    <p class="subtitle">
+      Enregistrez votre voix et obtenez la transcription en texte.
+      Cliquez sur le micro pour commencer, puis recliquez pour arrêter.
+    </p>
+
+    <div class="recorder">
+      <button type="button" class="mic-btn" id="micBtn" title="Démarrer l'enregistrement">🎤</button>
+      <p class="status-line" id="statusLine">Prêt à enregistrer</p>
+      <p class="timer hidden" id="timer">00:00</p>
+    </div>
+
+    <div class="section hidden" id="audioSection">
+      <p class="section-title">Enregistrement</p>
+      <audio id="audioPlayer" controls></audio>
+    </div>
+
+    <div class="section">
+      <p class="section-title">Transcription</p>
+      <textarea
+        id="transcript"
+        class="transcript-box"
+        placeholder="Le texte apparaîtra ici pendant ou après l'enregistrement…"
+        readonly
+      ></textarea>
+      <p class="interim hidden" id="interimText"></p>
+    </div>
+
+    <div class="actions">
+      <button type="button" class="action" id="copyBtn" disabled>Copier le texte</button>
+      <button type="button" class="action" id="downloadBtn" disabled>Télécharger le texte</button>
+      <button type="button" class="action" id="clearBtn" disabled>Tout effacer</button>
+    </div>
+
+    <p class="warning" id="browserWarning" hidden></p>
+  </div>
+
+  <script>
+    const micBtn = document.getElementById("micBtn");
+    const statusLine = document.getElementById("statusLine");
+    const timerEl = document.getElementById("timer");
+    const audioSection = document.getElementById("audioSection");
+    const audioPlayer = document.getElementById("audioPlayer");
+    const transcriptEl = document.getElementById("transcript");
+    const interimEl = document.getElementById("interimText");
+    const copyBtn = document.getElementById("copyBtn");
+    const downloadBtn = document.getElementById("downloadBtn");
+    const clearBtn = document.getElementById("clearBtn");
+    const browserWarning = document.getElementById("browserWarning");
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const supportsSpeech = Boolean(SpeechRecognition);
+    const supportsRecording = Boolean(navigator.mediaDevices?.getUserMedia);
+
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let recognition = null;
+    let isRecording = false;
+    let timerInterval = null;
+    let seconds = 0;
+    let finalTranscript = "";
+
+    function formatTime(totalSeconds) {
+      const m = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
+      const s = String(totalSeconds % 60).padStart(2, "0");
+      return `${m}:${s}`;
+    }
+
+    function updateActionButtons() {
+      const hasText = transcriptEl.value.trim().length > 0;
+      copyBtn.disabled = !hasText;
+      downloadBtn.disabled = !hasText;
+      clearBtn.disabled = !hasText && !audioPlayer.src;
+    }
+
+    function showWarning(message) {
+      browserWarning.hidden = false;
+      browserWarning.textContent = message;
+    }
+
+    function initRecognition() {
+      if (!supportsSpeech) return null;
+
+      const instance = new SpeechRecognition();
+      instance.lang = "fr-FR";
+      instance.continuous = true;
+      instance.interimResults = true;
+
+      instance.onresult = (event) => {
+        let interim = "";
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const text = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += text + " ";
+          } else {
+            interim += text;
+          }
+        }
+
+        transcriptEl.value = (finalTranscript + interim).trim();
+        interimEl.textContent = interim ? `… ${interim}` : "";
+        interimEl.classList.toggle("hidden", !interim);
+        updateActionButtons();
+      };
+
+      instance.onerror = (event) => {
+        if (event.error === "no-speech") return;
+        statusLine.textContent = `Erreur de transcription : ${event.error}`;
+        statusLine.classList.remove("active");
+      };
+
+      instance.onend = () => {
+        if (isRecording) {
+          try {
+            instance.start();
+          } catch {
+            /* ignore restart race */
+          }
+        }
+      };
+
+      return instance;
+    }
+
+    async function startRecording() {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      audioChunks = [];
+      mediaRecorder = new MediaRecorder(stream);
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunks.push(event.data);
+      };
+
+      mediaRecorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+
+        if (audioChunks.length > 0) {
+          const blob = new Blob(audioChunks, { type: "audio/webm" });
+          audioPlayer.src = URL.createObjectURL(blob);
+          audioSection.classList.remove("hidden");
+        }
+
+        updateActionButtons();
+      };
+
+      mediaRecorder.start();
+      isRecording = true;
+
+      if (supportsSpeech) {
+        finalTranscript = transcriptEl.value.trim() ? transcriptEl.value.trim() + " " : "";
+        recognition = initRecognition();
+        recognition.start();
+      }
+
+      micBtn.classList.add("recording");
+      micBtn.textContent = "⏹";
+      micBtn.title = "Arrêter l'enregistrement";
+      statusLine.textContent = "Enregistrement en cours… Parlez maintenant.";
+      statusLine.classList.add("active");
+      timerEl.classList.remove("hidden");
+
+      seconds = 0;
+      timerEl.textContent = "00:00";
+      timerInterval = setInterval(() => {
+        seconds += 1;
+        timerEl.textContent = formatTime(seconds);
+      }, 1000);
+    }
+
+    function stopRecording() {
+      isRecording = false;
+
+      if (mediaRecorder?.state !== "inactive") {
+        mediaRecorder.stop();
+      }
+
+      if (recognition) {
+        recognition.stop();
+        recognition = null;
+      }
+
+      clearInterval(timerInterval);
+      micBtn.classList.remove("recording");
+      micBtn.textContent = "🎤";
+      micBtn.title = "Démarrer l'enregistrement";
+      statusLine.textContent = "Enregistrement terminé.";
+      statusLine.classList.remove("active");
+      interimEl.classList.add("hidden");
+      updateActionButtons();
+    }
+
+    micBtn.addEventListener("click", async () => {
+      if (!supportsRecording) {
+        showWarning("Votre navigateur ne permet pas l'accès au microphone.");
+        return;
+      }
+
+      if (isRecording) {
+        stopRecording();
+        return;
+      }
+
+      try {
+        await startRecording();
+      } catch {
+        showWarning("Accès au microphone refusé. Autorisez le micro dans les paramètres du navigateur.");
+      }
+    });
+
+    copyBtn.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(transcriptEl.value.trim());
+      statusLine.textContent = "Texte copié dans le presse-papiers.";
+    });
+
+    downloadBtn.addEventListener("click", () => {
+      const text = transcriptEl.value.trim();
+      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `transcription_${new Date().toISOString().slice(0, 10)}.txt`;
+      link.click();
+      URL.revokeObjectURL(url);
+    });
+
+    clearBtn.addEventListener("click", () => {
+      finalTranscript = "";
+      transcriptEl.value = "";
+      interimEl.textContent = "";
+      interimEl.classList.add("hidden");
+      audioPlayer.removeAttribute("src");
+      audioSection.classList.add("hidden");
+      timerEl.classList.add("hidden");
+      statusLine.textContent = "Prêt à enregistrer";
+      updateActionButtons();
+    });
+
+    if (!supportsRecording) {
+      micBtn.disabled = true;
+      showWarning("L'enregistrement vocal n'est pas supporté par ce navigateur.");
+    } else if (!supportsSpeech) {
+      showWarning(
+        "La transcription automatique nécessite Chrome ou Edge. " +
+        "L'enregistrement audio fonctionnera, mais sans conversion en texte."
+      );
+    } else if (!window.isSecureContext) {
+      showWarning("Le micro et la transcription nécessitent une connexion sécurisée (HTTPS).");
+    }
+
+    updateActionButtons();
+  </script>
+</body>
+</html>
