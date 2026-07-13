@@ -581,12 +581,32 @@
     }
 
     function parseDate(str) {
-      const t = str.toLowerCase().replace(/premier/g, "1").replace(/1er/g, "1").trim();
+      if (!str) return null;
+      const t = str.toLowerCase()
+        .replace(/\ble\b/g, "")
+        .replace(/premier/g, "1")
+        .replace(/1er/g, "1")
+        .replace(/\s+/g, " ")
+        .trim();
+
       const num = t.match(/(\d{1,2})[\/\-\.\s](\d{1,2})[\/\-\.\s](\d{4})/);
       if (num) return `${num[1].padStart(2, "0")}/${num[2].padStart(2, "0")}/${num[3]}`;
+
       const wrd = t.match(/(\d{1,2})\s+([a-zéûôîàèêù]+)\s+(\d{4})/);
       if (wrd && MOIS[wrd[2]]) return `${wrd[1].padStart(2, "0")}/${MOIS[wrd[2]]}/${wrd[3]}`;
+
       return null;
+    }
+
+    function extractDateFromAnswer(raw) {
+      let date = parseDate(raw);
+      if (date) return date;
+
+      const m = raw.match(
+        /(\d{1,2}\s+[a-zA-ZéûôîàèêùÉÛÔÎÀÈÊÙ]+\s+\d{4}|\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4})/i
+      );
+      if (m) date = parseDate(m[1]);
+      return date;
     }
 
     function extractFromTranscript(text) {
@@ -622,21 +642,24 @@
 
     function validateAnswer(fieldId, raw) {
       const field = FORM_FIELDS.find((f) => f.id === fieldId);
-      if (!field || !raw || raw.trim().length < 2) return null;
+      if (!field || !raw || raw.trim().length < 1) return null;
+      const cleaned = raw.trim();
 
       if (field.type === "text") {
-        const val = raw.replace(/^(je m'appelle|c'est|mon nom est|mon prénom est)\s+/i, "")
+        const val = cleaned.replace(/^(je m'appelle|c'est|mon nom est|mon prénom est)\s+/i, "")
           .replace(/[^a-zA-ZÀ-ÿ\s\-]/g, "").trim();
         const parts = val.split(/\s+/).filter(Boolean);
-        if (fieldId === "nom" || fieldId === "prenom") {
-          const word = parts.length > 1
-            ? (fieldId === "prenom" ? parts[0] : parts[parts.length - 1])
-            : parts[0];
-          return word && word.length >= 2 ? capitalizeName(word) : null;
-        }
+        const word = parts.length > 1
+          ? (fieldId === "prenom" ? parts[0] : parts[parts.length - 1])
+          : parts[0];
+        return word && word.length >= 2 ? capitalizeName(word) : null;
       }
 
-      const date = parseDate(raw);
+      let date = extractDateFromAnswer(cleaned);
+      if (!date) {
+        const extracted = extractFromTranscript(cleaned);
+        date = extracted[fieldId] || null;
+      }
       if (!date) return null;
 
       if (fieldId === "dateRetour" && formData.dateDepart) {
@@ -684,22 +707,32 @@
       followUpRecognition = new SpeechRecognition();
       followUpRecognition.lang = "fr-FR";
       followUpRecognition.interimResults = true;
-      followUpRecognition.continuous = false;
+      followUpRecognition.continuous = true;
 
       followUpRecognition.onstart = () => {
         setStatus("Enregistrement… relâchez pour envoyer", "listening");
       };
 
       followUpRecognition.onresult = (e) => {
-        pushToTalkTranscript = Array.from(e.results)
-          .map((r) => r[0].transcript)
-          .join(" ")
-          .trim();
+        let text = "";
+        for (let i = 0; i < e.results.length; i++) {
+          text += e.results[i][0].transcript;
+        }
+        pushToTalkTranscript = text.trim();
+        if (pushToTalkTranscript) {
+          followupText.textContent = `En cours : « ${pushToTalkTranscript} »`;
+        }
       };
 
       followUpRecognition.onerror = (e) => {
-        if (e.error !== "aborted") {
+        if (e.error !== "aborted" && e.error !== "no-speech") {
           setStatus("Erreur micro — réessayez");
+        }
+      };
+
+      followUpRecognition.onend = () => {
+        if (pushToTalkActive) {
+          try { followUpRecognition.start(); } catch { /* ignore */ }
         }
       };
 
@@ -716,28 +749,33 @@
       answerBtn.textContent = "Maintenez pour répondre";
 
       if (followUpRecognition) {
-        const rec = followUpRecognition;
-        rec.onend = () => processPushToTalkAnswer(pushToTalkTranscript);
-        try { rec.stop(); } catch { processPushToTalkAnswer(pushToTalkTranscript); }
+        followUpRecognition.onend = null;
+        try { followUpRecognition.stop(); } catch { /* ignore */ }
         followUpRecognition = null;
-      } else {
-        processPushToTalkAnswer(pushToTalkTranscript);
       }
+
+      setStatus("Analyse de votre réponse…");
+      setTimeout(() => processPushToTalkAnswer(pushToTalkTranscript), 500);
     }
 
     async function processPushToTalkAnswer(raw) {
       if (!followUpField) return;
 
+      const field = FORM_FIELDS.find((f) => f.id === followUpField);
+
       if (!raw || raw.length < 1) {
+        followupText.textContent = "Aucune réponse détectée. Maintenez le bouton et parlez.";
         setStatus("Aucune réponse — maintenez le bouton et parlez");
         answerBtn.disabled = false;
         return;
       }
 
+      followupText.textContent = `Vous avez dit : « ${raw} »`;
       setStatus("Analyse de votre réponse…");
       const value = validateAnswer(followUpField, raw);
 
       if (!value) {
+        followupText.textContent = `Je n'ai pas reconnu « ${raw} ». Maintenez le bouton et réessayez.`;
         await speak("Je n'ai pas bien compris. " + FOLLOWUP_QUESTIONS[followUpField]);
         setStatus("Maintenez le bouton pour répondre à nouveau");
         answerBtn.disabled = false;
@@ -747,7 +785,12 @@
       formData[followUpField] = value;
       saveFormData();
       renderDossier();
-      await speak("Merci, c'est noté.");
+
+      const display = field.type === "date" ? formatDateDisplay(value) : value;
+      followupText.textContent = `✓ ${field.label} enregistré : ${display}`;
+      dossierSection.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+      await speak("Merci, " + field.label.toLowerCase() + " : " + display + ". C'est noté.");
       await startFollowUp();
     }
 
