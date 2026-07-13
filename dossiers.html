@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mes dossiers vocaux</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+      min-height: 100vh;
+      padding: 2rem 1.5rem;
+    }
+
+    .page {
+      max-width: 720px;
+      margin: 0 auto;
+    }
+
+    .card {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+      padding: 2rem;
+    }
+
+    h1 { font-size: 1.5rem; color: #1a1a2e; margin-bottom: 0.5rem; }
+
+    .subtitle {
+      color: #666;
+      font-size: 0.9rem;
+      line-height: 1.5;
+      margin-bottom: 1.5rem;
+    }
+
+    .nav-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .nav-links a {
+      color: #0e8579;
+      font-size: 0.88rem;
+      font-weight: 600;
+      text-decoration: none;
+    }
+
+    .nav-links a:hover { text-decoration: underline; }
+
+    .empty {
+      text-align: center;
+      padding: 2.5rem 1rem;
+      color: #888;
+      line-height: 1.6;
+    }
+
+    .empty a {
+      color: #11998e;
+      font-weight: 600;
+    }
+
+    .dossier-list { display: grid; gap: 1rem; }
+
+    .dossier-item {
+      border: 1px solid #e8e8e8;
+      border-radius: 12px;
+      padding: 1rem 1.1rem;
+      background: #fafafa;
+    }
+
+    .dossier-item.complete {
+      background: #f1f8f2;
+      border-color: #c8e6c9;
+    }
+
+    .dossier-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      align-items: flex-start;
+      margin-bottom: 0.5rem;
+    }
+
+    .dossier-title {
+      font-weight: 700;
+      color: #1a1a2e;
+      font-size: 1rem;
+    }
+
+    .badge {
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 0.25rem 0.55rem;
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+
+    .badge.complete { background: #c8e6c9; color: #2e7d32; }
+    .badge.partial { background: #ffe0b2; color: #e65100; }
+
+    .meta {
+      font-size: 0.8rem;
+      color: #777;
+      margin-bottom: 0.6rem;
+    }
+
+    .preview {
+      font-size: 0.85rem;
+      color: #555;
+      line-height: 1.45;
+      margin-bottom: 0.85rem;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .fields {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin-bottom: 0.85rem;
+    }
+
+    .chip {
+      font-size: 0.72rem;
+      padding: 0.2rem 0.5rem;
+      border-radius: 6px;
+      background: #eee;
+      color: #555;
+    }
+
+    .chip.ok { background: #e8f5e9; color: #2e7d32; }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .btn {
+      border: none;
+      border-radius: 8px;
+      padding: 0.55rem 0.85rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .btn.primary { background: #43a047; color: white; }
+    .btn.primary:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn.secondary { background: #e8f4f3; color: #0e8579; }
+    .btn.danger { background: #ffebee; color: #c62828; }
+
+    .audio-panel {
+      margin-top: 0.75rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid #e0e0e0;
+    }
+
+    .audio-panel audio { width: 100%; }
+
+    .transcript-panel {
+      margin-top: 0.75rem;
+      padding: 0.75rem;
+      background: white;
+      border-radius: 8px;
+      border: 1px solid #e0e0e0;
+      font-size: 0.85rem;
+      line-height: 1.5;
+      color: #444;
+      white-space: pre-wrap;
+    }
+
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="card">
+      <h1>Mes dossiers vocaux</h1>
+      <p class="subtitle">
+        Chaque enregistrement est sauvegardé ici avec son audio, sa transcription et les champs extraits.
+        En fin de journée, choisissez un dossier complet pour remplir un formulaire distinct.
+      </p>
+
+      <div class="nav-links">
+        <a href="message-vocal.html">+ Nouvel enregistrement</a>
+        <a href="formulaire.html">Formulaire vide</a>
+      </div>
+
+      <div id="list" class="dossier-list"></div>
+      <div id="empty" class="empty hidden">
+        Aucun dossier enregistré pour l'instant.<br>
+        <a href="message-vocal.html">Enregistrer un premier message vocal</a>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { listDossiers, deleteDossier } from "./js/dossiers-db.js";
+
+    const listEl = document.getElementById("list");
+    const emptyEl = document.getElementById("empty");
+    const FIELD_LABELS = {
+      nom: "Nom",
+      prenom: "Prénom",
+      dateNaissance: "Naissance",
+      dateDepart: "Départ",
+      dateRetour: "Retour",
+    };
+
+    function formatDate(ts) {
+      return new Date(ts).toLocaleString("fr-FR", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
+
+    function formatFieldDate(value) {
+      const m = value?.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (!m) return value || "";
+      const months = ["jan.", "fév.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
+      return `${parseInt(m[1], 10)} ${months[parseInt(m[2], 10) - 1]} ${m[3]}`;
+    }
+
+    function renderDossier(dossier) {
+      const item = document.createElement("article");
+      item.className = `dossier-item ${dossier.complete ? "complete" : ""}`;
+      item.dataset.id = dossier.id;
+
+      const chips = Object.entries(FIELD_LABELS).map(([key, label]) => {
+        const val = dossier.formData?.[key];
+        const text = val
+          ? (key.startsWith("date") ? formatFieldDate(val) : val)
+          : "—";
+        return `<span class="chip ${val ? "ok" : ""}">${label} : ${text}</span>`;
+      }).join("");
+
+      item.innerHTML = `
+        <div class="dossier-head">
+          <div class="dossier-title">${dossier.label}</div>
+          <span class="badge ${dossier.complete ? "complete" : "partial"}">
+            ${dossier.complete ? "Complet" : `${dossier.filledCount || 0}/5 champs`}
+          </span>
+        </div>
+        <div class="meta">Enregistré le ${formatDate(dossier.updatedAt)}</div>
+        <div class="preview">${dossier.transcript || "Pas encore de transcription."}</div>
+        <div class="fields">${chips}</div>
+        <div class="actions">
+          <button type="button" class="btn primary fill-btn" ${dossier.complete ? "" : "disabled"}>
+            Remplir le formulaire →
+          </button>
+          <button type="button" class="btn secondary audio-btn" ${dossier.audioBlob ? "" : "disabled"}>
+            Écouter
+          </button>
+          <button type="button" class="btn secondary transcript-btn" ${dossier.transcript ? "" : "disabled"}>
+            Transcription
+          </button>
+          <button type="button" class="btn danger delete-btn">Supprimer</button>
+        </div>
+        <div class="audio-panel hidden"></div>
+      `;
+
+      item.querySelector(".fill-btn").addEventListener("click", () => {
+        location.href = `formulaire.html?dossier=${dossier.id}`;
+      });
+
+      item.querySelector(".audio-btn").addEventListener("click", () => {
+        const panel = item.querySelector(".audio-panel");
+        if (!dossier.audioBlob) return;
+        if (panel.querySelector("audio")) {
+          panel.classList.toggle("hidden");
+          return;
+        }
+        const url = URL.createObjectURL(dossier.audioBlob);
+        panel.innerHTML = `<audio controls src="${url}"></audio>`;
+        panel.classList.remove("hidden");
+      });
+
+      item.querySelector(".transcript-btn").addEventListener("click", () => {
+        const panel = item.querySelector(".audio-panel");
+        if (panel.querySelector(".transcript-panel")) {
+          panel.classList.toggle("hidden");
+          return;
+        }
+        panel.innerHTML = `<div class="transcript-panel">${dossier.transcript}</div>`;
+        panel.classList.remove("hidden");
+      });
+
+      item.querySelector(".delete-btn").addEventListener("click", async () => {
+        if (!confirm(`Supprimer le dossier « ${dossier.label} » ?`)) return;
+        await deleteDossier(dossier.id);
+        await render();
+      });
+
+      return item;
+    }
+
+    async function render() {
+      const dossiers = await listDossiers();
+      listEl.innerHTML = "";
+      emptyEl.classList.toggle("hidden", dossiers.length > 0);
+      dossiers.forEach((dossier) => listEl.appendChild(renderDossier(dossier)));
+    }
+
+    render();
+  </script>
+</body>
+</html>

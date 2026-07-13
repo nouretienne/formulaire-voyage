@@ -327,15 +327,49 @@
     }
 
     .container { max-width: 600px; }
+
+    .top-nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .top-nav a {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #0e8579;
+      text-decoration: none;
+    }
+
+    .top-nav a:hover { text-decoration: underline; }
+
+    .save-status {
+      font-size: 0.78rem;
+      color: #2e7d32;
+      font-weight: 600;
+      min-height: 1.1rem;
+    }
+
+    #saveDossierBtn {
+      background: #0e8579;
+      color: white;
+      grid-column: 1 / -1;
+    }
   </style>
 </head>
 <body>
   <div class="container">
+    <div class="top-nav">
+      <a href="dossiers.html">📁 Mes dossiers sauvegardés</a>
+      <span class="save-status" id="saveStatus"></span>
+    </div>
     <h1>Dossier de voyage vocal</h1>
     <p class="subtitle">
-      Décrivez votre voyage à voix haute en une seule prise. Nous extrairons automatiquement
-      vos informations pour remplir le formulaire. S'il manque des détails, une voix vous
-      posera les questions nécessaires.
+      Décrivez votre voyage à voix haute en une seule prise. Chaque enregistrement est
+      <strong>sauvegardé automatiquement</strong> (audio, transcription, champs extraits).
+      Vous pourrez remplir un formulaire distinct pour chaque dossier, quand vous le souhaitez.
     </p>
     <p class="field-hint" style="margin-bottom:1rem">
       Exemple : « Je m'appelle Patrick Dupont, je suis né le 22 août 1988,
@@ -422,17 +456,19 @@
       <button type="button" class="action" id="copyBtn" disabled>Copier le texte</button>
       <button type="button" class="action" id="downloadBtn" disabled>Télécharger</button>
       <button type="button" class="action" id="retryBtn" disabled>Retranscrire</button>
+      <button type="button" class="action" id="saveDossierBtn" disabled>Sauvegarder ce dossier</button>
       <button type="button" class="action" id="finishFormBtn" disabled>Voir le formulaire →</button>
       <button type="button" class="action" id="clearBtn" disabled>Tout effacer</button>
     </div>
 
     <p class="warning" id="browserWarning">
-      Version 2026-07-13c — La page est prête immédiatement. Utilisez le mode « Instantané » pour tester sans attente.
+      Version 2026-07-13d — Chaque enregistrement est sauvegardé dans « Mes dossiers ».
     </p>
   </div>
 
   <script type="module">
     import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2";
+    import { createDossier, updateDossier } from "./js/dossiers-db.js";
 
     env.allowLocalModels = false;
     env.backends.onnx.wasm.numThreads = 1;
@@ -473,6 +509,8 @@
     const retryBtn = document.getElementById("retryBtn");
     const clearBtn = document.getElementById("clearBtn");
     const finishFormBtn = document.getElementById("finishFormBtn");
+    const saveDossierBtn = document.getElementById("saveDossierBtn");
+    const saveStatus = document.getElementById("saveStatus");
     const dossierSection = document.getElementById("dossierSection");
     const dossierGrid = document.getElementById("dossierGrid");
     const followupBox = document.getElementById("followupBox");
@@ -486,7 +524,7 @@
     const browserWarning = document.getElementById("browserWarning");
 
     const STORAGE_KEY = "voyageFormData";
-    const APP_VERSION = "2026-07-13c";
+    const APP_VERSION = "2026-07-13d";
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const hasVoiceQA = Boolean(SpeechRecognition && window.speechSynthesis);
 
@@ -532,6 +570,44 @@
     let followUpChunks = [];
     let isSubmittingFollowUp = false;
     let lastUpdatedField = null;
+    let currentDossierId = null;
+    let persistTimer = null;
+
+    function setSaveStatus(msg) {
+      saveStatus.textContent = msg || "";
+    }
+
+    function schedulePersistDossier() {
+      clearTimeout(persistTimer);
+      persistTimer = setTimeout(() => { void persistCurrentDossier(); }, 300);
+    }
+
+    async function persistCurrentDossier() {
+      if (!currentDossierId) return;
+      try {
+        await updateDossier(currentDossierId, {
+          transcript: transcriptEl.value.trim(),
+          formData: { ...formData },
+          audioBlob: lastWavBlob || null,
+          engine: engineSelect.value,
+        });
+        setSaveStatus("Enregistré dans Mes dossiers ✓");
+        saveDossierBtn.disabled = false;
+      } catch (error) {
+        console.error(error);
+        setSaveStatus("Erreur de sauvegarde");
+      }
+    }
+
+    async function startNewDossier() {
+      currentDossierId = await createDossier({
+        engine: engineSelect.value,
+        transcript: "",
+        formData: {},
+      });
+      setSaveStatus("Nouveau dossier créé");
+      saveDossierBtn.disabled = false;
+    }
 
     const VIRTUAL_MIC_RE = /mixage|st[eé]r[eé]o mix|what u hear|loopback|wave out|sortie audio|output mix/i;
 
@@ -602,16 +678,19 @@
       const hasText = transcriptEl.value.trim().length > 0;
       const hasAudio = Boolean(audioPlayer.src);
       const complete = FORM_FIELDS.every((f) => formData[f.id]);
+      const hasDossier = Boolean(currentDossierId);
       copyBtn.disabled = !hasText;
       downloadBtn.disabled = !hasText;
       retryBtn.disabled = (!lastAudioSamples && !lastWavBlob) || isBusy || isFollowUpActive;
       clearBtn.disabled = !hasText && !hasAudio && !complete;
+      saveDossierBtn.disabled = !hasDossier && !hasText && !hasAudio;
       finishFormBtn.disabled = !complete;
       micBtn.disabled = isBusy || isFollowUpActive;
     }
 
     function saveFormData() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(formData));
+      schedulePersistDossier();
     }
 
     function formatDateDisplay(value) {
@@ -1144,22 +1223,22 @@
     async function startFollowUp() {
       const missing = missingFields();
       if (missing.length === 0) {
-      isFollowUpActive = false;
-      followUpField = null;
-      pushToTalkActive = false;
-      isSubmittingFollowUp = false;
-      if (followUpRecognition) {
-        followUpRecognition.onend = null;
-        try { followUpRecognition.stop(); } catch { /* ignore */ }
-        followUpRecognition = null;
-      }
-      stopFollowUpStream();
-      followupBox.classList.add("hidden");
-      pttHint.classList.add("hidden");
-      followupManualWrap.classList.remove("visible");
+        isFollowUpActive = false;
+        followUpField = null;
+        pushToTalkActive = false;
+        isSubmittingFollowUp = false;
+        if (followUpRecognition) {
+          followUpRecognition.onend = null;
+          try { followUpRecognition.stop(); } catch { /* ignore */ }
+          followUpRecognition = null;
+        }
+        stopFollowUpStream();
+        followupBox.classList.add("hidden");
+        pttHint.classList.add("hidden");
         followupManualWrap.classList.remove("visible");
-        await speak("Parfait, toutes les informations sont complètes. Vous pouvez consulter le formulaire.");
-        setStatus("Dossier complet ✓");
+        await persistCurrentDossier();
+        await speak("Parfait, toutes les informations sont complètes. Vous pouvez consulter le formulaire ou continuer avec un autre enregistrement.");
+        setStatus("Dossier complet ✓ — sauvegardé");
         updateButtons();
         return;
       }
@@ -1178,6 +1257,7 @@
 
       if (missing.length === 0) {
         setStatus("Toutes les informations ont été extraites ✓");
+        await persistCurrentDossier();
         await speak("J'ai bien extrait toutes vos informations. Votre dossier est complet.");
         return;
       }
@@ -1527,6 +1607,8 @@
       audioSection.classList.add("hidden");
       updateButtons();
 
+      await startNewDossier();
+
       const constraints = {
         audio: {
           deviceId: micSelect.value ? { exact: micSelect.value } : undefined,
@@ -1619,6 +1701,8 @@
       samples = amplify(samples);
       lastAudioSamples = samples;
 
+      schedulePersistDossier();
+
       return {
         duration: audioBuffer.duration.toFixed(1),
         peak: maxAmp(samples),
@@ -1649,6 +1733,7 @@
         setStatus(text ? "Transcription terminée ✓" : "Aucun texte reconnu");
         if (!text) {
           warn("Écoutez l'enregistrement ci-dessus. Si vous entendez votre voix, cliquez Retranscrire.");
+          await persistCurrentDossier();
         } else {
           browserWarning.hidden = true;
           await processTranscription(text);
@@ -1676,6 +1761,7 @@
       if (!text) {
         setStatus("Aucun texte reconnu");
         warn("Parlez clairement pendant l'enregistrement. La barre verte doit bouger. Réessayez.");
+        await persistCurrentDossier();
       } else {
         setStatus("Transcription terminée ✓");
         browserWarning.hidden = true;
@@ -1763,9 +1849,19 @@
       }
     });
 
-    finishFormBtn.addEventListener("click", () => {
+    finishFormBtn.addEventListener("click", async () => {
       saveFormData();
-      location.href = "formulaire.html?from=assistant";
+      await persistCurrentDossier();
+      if (currentDossierId) {
+        location.href = `formulaire.html?dossier=${currentDossierId}`;
+      } else {
+        location.href = "formulaire.html?from=assistant";
+      }
+    });
+
+    saveDossierBtn.addEventListener("click", async () => {
+      await persistCurrentDossier();
+      setStatus("Dossier sauvegardé dans Mes dossiers ✓");
     });
 
     retryBtn.addEventListener("click", async () => {
@@ -1794,8 +1890,10 @@
       localStorage.removeItem(STORAGE_KEY);
       isFollowUpActive = false;
       followUpField = null;
+      currentDossierId = null;
       pushToTalkActive = false;
       isSubmittingFollowUp = false;
+      setSaveStatus("");
       followupBox.classList.add("hidden");
       pttHint.classList.add("hidden");
       followupManualWrap.classList.remove("visible");
@@ -1811,7 +1909,7 @@
       audioSection.classList.add("hidden");
       timerEl.classList.add("hidden");
       browserWarning.hidden = false;
-      browserWarning.textContent = "Version " + APP_VERSION + " — La page est prête immédiatement. Utilisez le mode « Instantané » pour tester sans attente.";
+      browserWarning.textContent = "Version " + APP_VERSION + " — Chaque enregistrement est sauvegardé dans « Mes dossiers ».";
       setStatus("Prêt — décrivez votre voyage à voix haute");
       updateButtons();
     });

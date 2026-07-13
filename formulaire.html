@@ -137,7 +137,8 @@
   <div class="container">
     <h1>Formulaire de voyage</h1>
     <p class="subtitle">Remplissez tous les champs pour télécharger vos informations.
-      <br><a href="assistant-vocal.html" style="color:#667eea;font-size:0.85rem">Compléter avec l'assistante vocale →</a>
+      <br><a href="message-vocal.html" style="color:#667eea;font-size:0.85rem">Nouvel enregistrement vocal →</a>
+      · <a href="dossiers.html" style="color:#667eea;font-size:0.85rem">Mes dossiers sauvegardés →</a>
     </p>
 
     <form id="form" novalidate>
@@ -258,16 +259,25 @@
       jour.dispatchEvent(new Event("change", { bubbles: true }));
     }
 
+    function applyStoredData(stored, statusMessage) {
+      if (stored.nom) document.getElementById("nom").value = stored.nom;
+      if (stored.prenom) document.getElementById("prenom").value = stored.prenom;
+      dateFields.forEach((id) => {
+        if (stored[id]) setDateField(id, stored[id]);
+      });
+      if (statusMessage) {
+        statusEl.textContent = statusMessage;
+        statusEl.classList.add("complete");
+        statusEl.dataset.prefilled = "1";
+      }
+    }
+
     function prefillFromAssistant() {
       const saved = localStorage.getItem("voyageFormData");
       if (!saved) return;
       try {
         const stored = JSON.parse(saved);
-        if (stored.nom) document.getElementById("nom").value = stored.nom;
-        if (stored.prenom) document.getElementById("prenom").value = stored.prenom;
-        dateFields.forEach((id) => {
-          if (stored[id]) setDateField(id, stored[id]);
-        });
+        applyStoredData(stored);
         if (new URLSearchParams(location.search).get("from") === "assistant") {
           statusEl.textContent = "Dossier complété par l'assistante vocale — vérifiez et téléchargez.";
           statusEl.classList.add("complete");
@@ -275,7 +285,25 @@
       } catch { /* ignore */ }
     }
 
-    prefillFromAssistant();
+    async function prefillForm() {
+      const dossierId = new URLSearchParams(location.search).get("dossier");
+      if (dossierId) {
+        try {
+          const { getDossier } = await import("./js/dossiers-db.js");
+          const dossier = await getDossier(dossierId);
+          if (dossier?.formData) {
+            applyStoredData(
+              dossier.formData,
+              `Dossier « ${dossier.label} » chargé — vérifiez et téléchargez.`
+            );
+            return;
+          }
+        } catch { /* fallback localStorage */ }
+      }
+      prefillFromAssistant();
+    }
+
+    prefillForm().then(() => updateUI());
 
     function getDateValue(fieldId) {
       const group = document.querySelector(`.date-group[data-field="${fieldId}"]`);
@@ -315,9 +343,12 @@
       downloadBtn.disabled = !allFieldsValid();
 
       if (allFieldsValid()) {
-        statusEl.textContent = "Tous les champs sont remplis — vous pouvez télécharger.";
+        if (!statusEl.dataset.prefilled) {
+          statusEl.textContent = "Tous les champs sont remplis — vous pouvez télécharger.";
+        }
         statusEl.classList.add("complete");
       } else {
+        delete statusEl.dataset.prefilled;
         statusEl.textContent = remaining === 1
           ? "1 champ restant à remplir"
           : `${remaining} champs restants à remplir`;
@@ -396,8 +427,6 @@
       link.click();
       URL.revokeObjectURL(url);
     });
-
-    updateUI();
   </script>
 </body>
 </html>
