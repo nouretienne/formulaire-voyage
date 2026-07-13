@@ -250,14 +250,32 @@
       background: #667eea;
       color: white;
       width: 100%;
-      padding: 0.85rem;
+      padding: 1rem;
       border: none;
       border-radius: 8px;
       font-weight: 600;
       cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+      transition: background 0.15s, transform 0.1s;
+    }
+
+    #answerBtn:active:not(:disabled),
+    #answerBtn.recording {
+      background: #e53935;
+      transform: scale(0.98);
     }
 
     #answerBtn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .ptt-hint {
+      font-size: 0.78rem;
+      color: #667eea;
+      text-align: center;
+      margin-top: 0.5rem;
+      font-weight: 600;
+    }
 
     #finishFormBtn {
       background: #43a047;
@@ -286,6 +304,9 @@
       <select id="micSelect">
         <option value="">Microphone par défaut</option>
       </select>
+      <p class="field-hint" id="micHint">
+        Évitez « Mixage stéréo » — ce n'est pas un micro. Choisissez « Microphone » ou « Array ».
+      </p>
     </div>
 
     <div class="field">
@@ -346,7 +367,8 @@
 
     <div class="followup-box hidden" id="followupBox">
       <p id="followupText">Complétons les informations manquantes…</p>
-      <button type="button" id="answerBtn" disabled>Répondre à la question</button>
+      <button type="button" id="answerBtn" disabled>Maintenez pour répondre</button>
+      <p class="ptt-hint hidden" id="pttHint">Appuyez, parlez, relâchez pour envoyer</p>
     </div>
 
     <div class="actions">
@@ -409,6 +431,8 @@
     const followupBox = document.getElementById("followupBox");
     const followupText = document.getElementById("followupText");
     const answerBtn = document.getElementById("answerBtn");
+    const pttHint = document.getElementById("pttHint");
+    const micHint = document.getElementById("micHint");
     const browserWarning = document.getElementById("browserWarning");
 
     const STORAGE_KEY = "voyageFormData";
@@ -442,6 +466,10 @@
     let followUpRecognition = null;
     let isFollowUpActive = false;
     let isSpeaking = false;
+    let pushToTalkActive = false;
+    let pushToTalkTranscript = "";
+
+    const VIRTUAL_MIC_RE = /mixage|st[eé]r[eé]o mix|what u hear|loopback|wave out|sortie audio|output mix/i;
 
     let mediaStream = null;
     let mediaRecorder = null;
@@ -645,62 +673,104 @@
       });
     }
 
-    function listenForAnswer() {
-      if (!hasVoiceQA || !followUpField) return;
+    function isVirtualMic(label) {
+      return VIRTUAL_MIC_RE.test(label || "");
+    }
 
+    function listenForAnswer() {
+      if (!hasVoiceQA || !followUpField || pushToTalkActive) return;
+
+      pushToTalkTranscript = "";
       followUpRecognition = new SpeechRecognition();
       followUpRecognition.lang = "fr-FR";
-      followUpRecognition.interimResults = false;
+      followUpRecognition.interimResults = true;
+      followUpRecognition.continuous = false;
 
       followUpRecognition.onstart = () => {
-        setStatus("J'écoute votre réponse…", "listening");
-        answerBtn.disabled = true;
+        setStatus("Enregistrement… relâchez pour envoyer", "listening");
       };
 
-      followUpRecognition.onresult = async (e) => {
-        const answer = e.results[0][0].transcript;
-        const value = validateAnswer(followUpField, answer);
-
-        if (!value) {
-          await speak("Je n'ai pas bien compris. " + FOLLOWUP_QUESTIONS[followUpField]);
-          listenForAnswer();
-          return;
-        }
-
-        formData[followUpField] = value;
-        saveFormData();
-        renderDossier();
-        await speak("Merci, c'est noté.");
-        await startFollowUp();
+      followUpRecognition.onresult = (e) => {
+        pushToTalkTranscript = Array.from(e.results)
+          .map((r) => r[0].transcript)
+          .join(" ")
+          .trim();
       };
 
-      followUpRecognition.onerror = async (e) => {
-        if (e.error === "no-speech") {
-          setStatus("Je n'ai rien entendu — réessayez");
-          answerBtn.disabled = false;
-        } else {
-          await speak("Un souci technique. Appuyez sur Répondre à la question.");
-          answerBtn.disabled = false;
+      followUpRecognition.onerror = (e) => {
+        if (e.error !== "aborted") {
+          setStatus("Erreur micro — réessayez");
         }
       };
 
-      followUpRecognition.onend = () => {
-        if (isFollowUpActive && !isSpeaking) answerBtn.disabled = false;
-      };
+      try { followUpRecognition.start(); } catch {
+        setStatus("Micro indisponible");
+        stopPushToTalk();
+      }
+    }
 
-      try { followUpRecognition.start(); } catch { answerBtn.disabled = false; }
+    function stopPushToTalk() {
+      if (!pushToTalkActive) return;
+      pushToTalkActive = false;
+      answerBtn.classList.remove("recording");
+      answerBtn.textContent = "Maintenez pour répondre";
+
+      if (followUpRecognition) {
+        const rec = followUpRecognition;
+        rec.onend = () => processPushToTalkAnswer(pushToTalkTranscript);
+        try { rec.stop(); } catch { processPushToTalkAnswer(pushToTalkTranscript); }
+        followUpRecognition = null;
+      } else {
+        processPushToTalkAnswer(pushToTalkTranscript);
+      }
+    }
+
+    async function processPushToTalkAnswer(raw) {
+      if (!followUpField) return;
+
+      if (!raw || raw.length < 1) {
+        setStatus("Aucune réponse — maintenez le bouton et parlez");
+        answerBtn.disabled = false;
+        return;
+      }
+
+      setStatus("Analyse de votre réponse…");
+      const value = validateAnswer(followUpField, raw);
+
+      if (!value) {
+        await speak("Je n'ai pas bien compris. " + FOLLOWUP_QUESTIONS[followUpField]);
+        setStatus("Maintenez le bouton pour répondre à nouveau");
+        answerBtn.disabled = false;
+        return;
+      }
+
+      formData[followUpField] = value;
+      saveFormData();
+      renderDossier();
+      await speak("Merci, c'est noté.");
+      await startFollowUp();
+    }
+
+    function startPushToTalk(e) {
+      if (e) e.preventDefault();
+      if (isSpeaking || !followUpField || pushToTalkActive || answerBtn.disabled) return;
+      pushToTalkActive = true;
+      answerBtn.classList.add("recording");
+      answerBtn.textContent = "Parlez… relâchez pour envoyer";
+      listenForAnswer();
     }
 
     async function askForField(fieldId) {
       followUpField = fieldId;
       const question = FOLLOWUP_QUESTIONS[fieldId];
       followupBox.classList.remove("hidden");
+      pttHint.classList.remove("hidden");
       followupText.textContent = "Il manque une information : " + question;
       setStatus("Question vocale en cours…", "listening");
       await speak(question);
-      setStatus("À vous de répondre");
+      setStatus("Maintenez le bouton pour répondre");
       answerBtn.disabled = false;
-      listenForAnswer();
+      answerBtn.textContent = "Maintenez pour répondre";
     }
 
     async function startFollowUp() {
@@ -708,6 +778,7 @@
       if (missing.length === 0) {
         isFollowUpActive = false;
         followupBox.classList.add("hidden");
+        pttHint.classList.add("hidden");
         await speak("Parfait, toutes les informations sont complètes. Vous pouvez consulter le formulaire.");
         setStatus("Dossier complet ✓");
         updateButtons();
@@ -767,18 +838,40 @@
       } catch { /* permission not yet granted */ }
 
       const devices = await navigator.mediaDevices.enumerateDevices();
-      micSelect.innerHTML = "";
       const mics = devices.filter((d) => d.kind === "audioinput");
       if (mics.length === 0) {
         micSelect.innerHTML = '<option value="">Microphone par défaut</option>';
         return;
       }
-      mics.forEach((mic, i) => {
+
+      const realMics = mics.filter((m) => !isVirtualMic(m.label));
+      const virtualMics = mics.filter((m) => isVirtualMic(m.label));
+      const sorted = [...realMics, ...virtualMics];
+      const savedMic = localStorage.getItem("selectedMic");
+
+      micSelect.innerHTML = "";
+      sorted.forEach((mic, i) => {
         const opt = document.createElement("option");
         opt.value = mic.deviceId;
-        opt.textContent = mic.label || `Micro ${i + 1}`;
+        const label = mic.label || `Micro ${i + 1}`;
+        opt.textContent = isVirtualMic(label)
+          ? `${label} ⚠ (pas un micro)`
+          : label;
+        if (isVirtualMic(label)) opt.dataset.virtual = "1";
         micSelect.appendChild(opt);
       });
+
+      if (savedMic && sorted.some((m) => m.deviceId === savedMic)) {
+        micSelect.value = savedMic;
+      } else if (realMics.length > 0) {
+        micSelect.value = realMics[0].deviceId;
+      }
+
+      if (isVirtualMic(micSelect.selectedOptions[0]?.textContent || "")) {
+        micHint.textContent = "⚠ Ce périphérique capture le son du PC, pas votre voix. Choisissez un vrai micro.";
+      } else {
+        micHint.textContent = "Évitez « Mixage stéréo » — ce n'est pas un micro. Choisissez « Microphone » ou « Array ».";
+      }
     }
 
     function encodeWav(audioBuffer) {
@@ -1025,12 +1118,19 @@
     async function startRecording() {
       if (isBusy || isRecording) return;
 
+      const selectedLabel = micSelect.selectedOptions[0]?.textContent || "";
+      if (isVirtualMic(selectedLabel)) {
+        warn("« Mixage stéréo » n'est pas un micro. Sélectionnez « Microphone array » ou « Microphone » dans la liste.");
+        return;
+      }
+
       transcriptEl.value = "";
       lastAudioSamples = null;
       lastWavBlob = null;
       Object.keys(formData).forEach((k) => delete formData[k]);
       isFollowUpActive = false;
       followupBox.classList.add("hidden");
+      pttHint.classList.add("hidden");
       dossierSection.classList.add("hidden");
       peakVolume = 0;
       if (audioPlayer.src) URL.revokeObjectURL(audioPlayer.src);
@@ -1252,9 +1352,21 @@
       }
     });
 
-    answerBtn.addEventListener("click", () => {
-      if (!followUpField || isSpeaking) return;
-      listenForAnswer();
+    answerBtn.addEventListener("mousedown", startPushToTalk);
+    answerBtn.addEventListener("mouseup", stopPushToTalk);
+    answerBtn.addEventListener("mouseleave", stopPushToTalk);
+    answerBtn.addEventListener("touchstart", startPushToTalk, { passive: false });
+    answerBtn.addEventListener("touchend", (e) => { e.preventDefault(); stopPushToTalk(); });
+    answerBtn.addEventListener("touchcancel", stopPushToTalk);
+
+    micSelect.addEventListener("change", () => {
+      localStorage.setItem("selectedMic", micSelect.value);
+      const label = micSelect.selectedOptions[0]?.textContent || "";
+      if (isVirtualMic(label)) {
+        micHint.textContent = "⚠ Ce périphérique capture le son du PC, pas votre voix. Choisissez un vrai micro.";
+      } else {
+        micHint.textContent = "Évitez « Mixage stéréo » — ce n'est pas un micro. Choisissez « Microphone » ou « Array ».";
+      }
     });
 
     finishFormBtn.addEventListener("click", () => {
@@ -1289,6 +1401,7 @@
       isFollowUpActive = false;
       followUpField = null;
       followupBox.classList.add("hidden");
+      pttHint.classList.add("hidden");
       dossierSection.classList.add("hidden");
       if (followUpRecognition) try { followUpRecognition.stop(); } catch { /* ignore */ }
       if (audioPlayer.src) URL.revokeObjectURL(audioPlayer.src);
