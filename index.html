@@ -136,7 +136,9 @@
 <body>
   <div class="container">
     <h1>Formulaire de voyage</h1>
-    <p class="subtitle">Remplissez tous les champs pour télécharger vos informations.</p>
+    <p class="subtitle">Remplissez tous les champs pour télécharger vos informations.
+      <br><a href="assistant-vocal.html" style="color:#667eea;font-size:0.85rem">Compléter avec l'assistante vocale →</a>
+    </p>
 
     <form id="form" novalidate>
       <div class="field">
@@ -241,6 +243,39 @@
     }
 
     document.querySelectorAll(".date-group").forEach(populateDateGroup);
+
+    function setDateField(fieldId, dateStr) {
+      const m = dateStr.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (!m) return;
+      const group = document.querySelector(`.date-group[data-field="${fieldId}"]`);
+      if (!group) return;
+      const jour = group.querySelector(".date-jour");
+      const mois = group.querySelector(".date-mois");
+      const annee = group.querySelector(".date-annee");
+      if ([...jour.options].some((o) => o.value === m[1])) jour.value = m[1];
+      if ([...mois.options].some((o) => o.value === m[2])) mois.value = m[2];
+      if ([...annee.options].some((o) => o.value === m[3])) annee.value = m[3];
+      jour.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    function prefillFromAssistant() {
+      const saved = localStorage.getItem("voyageFormData");
+      if (!saved) return;
+      try {
+        const stored = JSON.parse(saved);
+        if (stored.nom) document.getElementById("nom").value = stored.nom;
+        if (stored.prenom) document.getElementById("prenom").value = stored.prenom;
+        dateFields.forEach((id) => {
+          if (stored[id]) setDateField(id, stored[id]);
+        });
+        if (new URLSearchParams(location.search).get("from") === "assistant") {
+          statusEl.textContent = "Dossier complété par l'assistante vocale — vérifiez et téléchargez.";
+          statusEl.classList.add("complete");
+        }
+      } catch { /* ignore */ }
+    }
+
+    prefillFromAssistant();
 
     function getDateValue(fieldId) {
       const group = document.querySelector(`.date-group[data-field="${fieldId}"]`);

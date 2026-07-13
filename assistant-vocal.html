@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Assistant vocal — Compléter votre dossier</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 1.5rem;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+    }
+
+    .page {
+      width: 100%;
+      max-width: 640px;
+      display: grid;
+      gap: 1rem;
+    }
+
+    .card {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.18);
+      padding: 1.75rem;
+    }
+
+    .header { text-align: center; }
+
+    .badge {
+      display: inline-block;
+      background: #eef0ff;
+      color: #5a6fd6;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 0.35rem 0.75rem;
+      border-radius: 999px;
+      margin-bottom: 0.75rem;
+    }
+
+    h1 {
+      font-size: 1.45rem;
+      color: #1a1a2e;
+      margin-bottom: 0.5rem;
+    }
+
+    .intro {
+      color: #666;
+      font-size: 0.92rem;
+      line-height: 1.55;
+    }
+
+    .progress-block { margin-top: 1.25rem; }
+
+    .progress-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.82rem;
+      color: #555;
+      margin-bottom: 0.4rem;
+    }
+
+    .progress-track {
+      height: 8px;
+      background: #eee;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #667eea, #764ba2);
+      transition: width 0.35s ease;
+    }
+
+    .bot-zone {
+      display: flex;
+      gap: 1rem;
+      align-items: flex-start;
+      margin-bottom: 1rem;
+    }
+
+    .avatar {
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.4rem;
+      flex-shrink: 0;
+      box-shadow: 0 6px 16px rgba(102, 126, 234, 0.35);
+    }
+
+    .avatar.speaking { animation: glow 1.2s infinite; }
+    .avatar.listening { background: linear-gradient(135deg, #11998e, #38ef7d); }
+
+    @keyframes glow {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(102, 126, 234, 0.4); }
+      50% { box-shadow: 0 0 0 10px rgba(102, 126, 234, 0); }
+    }
+
+    .bot-meta { flex: 1; }
+
+    .bot-name {
+      font-weight: 700;
+      color: #1a1a2e;
+      font-size: 0.95rem;
+      margin-bottom: 0.15rem;
+    }
+
+    .bot-state {
+      font-size: 0.78rem;
+      color: #888;
+      margin-bottom: 0.6rem;
+    }
+
+    .chat {
+      max-height: 280px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+      padding-right: 0.25rem;
+    }
+
+    .bubble {
+      max-width: 92%;
+      padding: 0.75rem 0.9rem;
+      border-radius: 14px;
+      font-size: 0.92rem;
+      line-height: 1.5;
+    }
+
+    .bubble.bot {
+      background: #f4f5ff;
+      color: #2c2c44;
+      border-bottom-left-radius: 4px;
+      align-self: flex-start;
+    }
+
+    .bubble.user {
+      background: #667eea;
+      color: white;
+      border-bottom-right-radius: 4px;
+      align-self: flex-end;
+    }
+
+    .bubble.system {
+      background: #f8f8f8;
+      color: #777;
+      font-size: 0.8rem;
+      align-self: center;
+      text-align: center;
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.65rem;
+      margin-top: 1rem;
+    }
+
+    button {
+      border: none;
+      border-radius: 10px;
+      padding: 0.85rem 1rem;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.15s;
+    }
+
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    #startBtn, #speakBtn {
+      background: #667eea;
+      color: white;
+      grid-column: 1 / -1;
+    }
+
+    #startBtn:hover:not(:disabled), #speakBtn:hover:not(:disabled) { background: #5a6fd6; }
+
+    #repeatBtn, #typeBtn {
+      background: #f0f0f0;
+      color: #333;
+    }
+
+    #finishBtn {
+      background: #43a047;
+      color: white;
+      grid-column: 1 / -1;
+      display: none;
+    }
+
+    .fields-grid {
+      display: grid;
+      gap: 0.5rem;
+    }
+
+    .field-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.65rem 0.85rem;
+      border-radius: 10px;
+      background: #fafafa;
+      border: 1px solid #eee;
+      font-size: 0.88rem;
+    }
+
+    .field-row.done {
+      border-color: #c8e6c9;
+      background: #f1f8f2;
+    }
+
+    .field-row.pending {
+      border-color: #ffe0b2;
+      background: #fffaf2;
+    }
+
+    .field-label { color: #555; font-weight: 600; }
+
+    .field-value {
+      color: #1a1a2e;
+      font-weight: 500;
+      text-align: right;
+      max-width: 55%;
+      word-break: break-word;
+    }
+
+    .field-value.missing { color: #bbb; font-style: italic; font-weight: 400; }
+
+    .manual-panel {
+      margin-top: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid #eee;
+      display: none;
+    }
+
+    .manual-panel.visible { display: block; }
+
+    .manual-panel input {
+      width: 100%;
+      padding: 0.75rem;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 1rem;
+      margin-top: 0.4rem;
+    }
+
+    .manual-panel input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    .manual-actions {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 0.65rem;
+    }
+
+    .manual-actions button { flex: 1; }
+
+    .hint {
+      margin-top: 1rem;
+      padding: 0.75rem 1rem;
+      background: #fff8e1;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      color: #795548;
+      line-height: 1.5;
+    }
+
+    .footer-link {
+      text-align: center;
+      margin-top: 0.5rem;
+    }
+
+    .footer-link a {
+      color: white;
+      font-size: 0.85rem;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="card header">
+      <span class="badge">Dernière étape</span>
+      <h1>Complétons votre dossier ensemble</h1>
+      <p class="intro">
+        Je suis <strong>Léa</strong>, votre assistante. Je vais vous poser quelques questions
+        à voix haute pour compléter les informations manquantes. Répondez naturellement —
+        prenez votre temps, je vous guide pas à pas.
+      </p>
+      <div class="progress-block">
+        <div class="progress-label">
+          <span id="progressText">0 information sur 5</span>
+          <span id="progressPct">0 %</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="bot-zone">
+        <div class="avatar" id="avatar">🤖</div>
+        <div class="bot-meta">
+          <div class="bot-name">Léa — Assistante vocale</div>
+          <div class="bot-state" id="botState">Prête à démarrer</div>
+          <div class="chat" id="chat"></div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button type="button" id="startBtn">Commencer l'assistant vocal</button>
+        <button type="button" id="speakBtn" disabled>Répondre à voix haute</button>
+        <button type="button" id="repeatBtn" disabled>Répéter la question</button>
+        <button type="button" id="typeBtn" disabled>Répondre par écrit</button>
+        <button type="button" id="finishBtn">Voir le formulaire complété →</button>
+      </div>
+
+      <div class="manual-panel" id="manualPanel">
+        <label for="manualInput" id="manualLabel">Votre réponse</label>
+        <input type="text" id="manualInput" autocomplete="off">
+        <div class="manual-actions">
+          <button type="button" id="manualSubmit" style="background:#667eea;color:white">Valider</button>
+          <button type="button" id="manualCancel" style="background:#f0f0f0;color:#333">Annuler</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="section-title" style="font-weight:700;color:#333;margin-bottom:0.75rem">Votre dossier en cours</p>
+      <div class="fields-grid" id="fieldsGrid"></div>
+      <p class="hint" id="techHint">
+        Utilisez Chrome ou Edge pour l'assistant vocal. Autorisez le micro quand le navigateur le demande.
+      </p>
+    </div>
+
+    <p class="footer-link">
+      <a href="formulaire.html" id="formLink">Accéder directement au formulaire</a>
+    </p>
+  </div>
+
+  <script>
+    const STORAGE_KEY = "voyageFormData";
+
+    const FIELDS = [
+      { id: "nom", label: "Nom", type: "text" },
+      { id: "prenom", label: "Prénom", type: "text" },
+      { id: "dateNaissance", label: "Date de naissance", type: "date" },
+      { id: "dateDepart", label: "Date de départ", type: "date" },
+      { id: "dateRetour", label: "Date de retour", type: "date" },
+    ];
+
+    const MOIS = {
+      janvier: "01", fevrier: "02", février: "02", mars: "03", avril: "04",
+      mai: "05", juin: "06", juillet: "07", aout: "08", août: "08",
+      septembre: "09", octobre: "10", novembre: "11", decembre: "12", décembre: "12",
+    };
+
+    const QUESTIONS = {
+      nom: {
+        ask: "Quel est votre nom de famille ?",
+        retry: "Je n'ai pas bien saisi votre nom. Pouvez-vous le répéter, s'il vous plaît ?",
+        clarify: "Pourriez-vous épeler votre nom de famille ?",
+      },
+      prenom: {
+        ask: "Et votre prénom ?",
+        retry: "Je n'ai pas bien entendu votre prénom. Pouvez-vous le redire ?",
+        clarify: "Quel est votre prénom, tout simplement ?",
+      },
+      dateNaissance: {
+        ask: "Quelle est votre date de naissance ? Par exemple : 15 mars 1990.",
+        retry: "Je n'ai pas reconnu cette date. Dites le jour, le mois et l'année.",
+        clarify: "Indiquez votre date de naissance complète, comme : 15 mars 1990.",
+      },
+      dateDepart: {
+        ask: "À quelle date partez-vous en voyage ?",
+        retry: "Je n'ai pas saisi la date de départ. Pouvez-vous la répéter ?",
+        clarify: "Quel jour partez-vous ? Dites par exemple : 1er août 2026.",
+      },
+      dateRetour: {
+        ask: "Très bien. Et quelle est votre date de retour ?",
+        retry: "Je n'ai pas reconnu la date de retour. Pouvez-vous la redire ?",
+        clarify: "À quelle date revenez-vous ? Par exemple : 15 août 2026.",
+      },
+    };
+
+    const data = {};
+    let currentField = null;
+    let retryCount = 0;
+    let started = false;
+    let recognition = null;
+    let isSpeaking = false;
+    let isListening = false;
+
+    const avatar = document.getElementById("avatar");
+    const botState = document.getElementById("botState");
+    const chat = document.getElementById("chat");
+    const progressText = document.getElementById("progressText");
+    const progressPct = document.getElementById("progressPct");
+    const progressFill = document.getElementById("progressFill");
+    const fieldsGrid = document.getElementById("fieldsGrid");
+    const startBtn = document.getElementById("startBtn");
+    const speakBtn = document.getElementById("speakBtn");
+    const repeatBtn = document.getElementById("repeatBtn");
+    const typeBtn = document.getElementById("typeBtn");
+    const finishBtn = document.getElementById("finishBtn");
+    const manualPanel = document.getElementById("manualPanel");
+    const manualLabel = document.getElementById("manualLabel");
+    const manualInput = document.getElementById("manualInput");
+    const techHint = document.getElementById("techHint");
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const hasSpeech = Boolean(SpeechRecognition && window.speechSynthesis);
+
+    function loadInitialData() {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        try { Object.assign(data, JSON.parse(saved)); } catch { /* ignore */ }
+      }
+
+      const params = new URLSearchParams(location.search);
+      FIELDS.forEach((f) => {
+        if (params.get(f.id)) data[f.id] = params.get(f.id);
+      });
+    }
+
+    function saveData() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    }
+
+    function filledCount() {
+      return FIELDS.filter((f) => data[f.id]).length;
+    }
+
+    function missingFields() {
+      return FIELDS.filter((f) => !data[f.id]);
+    }
+
+    function formatDisplay(fieldId, value) {
+      if (!value) return "À compléter";
+      if (!fieldId.startsWith("date")) return value;
+      const m = value.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (!m) return value;
+      const months = ["jan.", "fév.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
+      return `${parseInt(m[1], 10)} ${months[parseInt(m[2], 10) - 1]} ${m[3]}`;
+    }
+
+    function updateUI() {
+      const filled = filledCount();
+      const total = FIELDS.length;
+      const pct = Math.round((filled / total) * 100);
+
+      progressText.textContent = `${filled} information${filled > 1 ? "s" : ""} sur ${total}`;
+      progressPct.textContent = `${pct} %`;
+      progressFill.style.width = `${pct}%`;
+
+      fieldsGrid.innerHTML = FIELDS.map((f) => {
+        const val = data[f.id];
+        const cls = val ? "done" : "pending";
+        return `<div class="field-row ${cls}">
+          <span class="field-label">${f.label}</span>
+          <span class="field-value ${val ? "" : "missing"}">${formatDisplay(f.id, val)}</span>
+        </div>`;
+      }).join("");
+
+      const complete = filled === total;
+      finishBtn.style.display = complete ? "block" : "none";
+      startBtn.style.display = started && !complete ? "none" : started ? "none" : "block";
+      speakBtn.disabled = !started || complete || isSpeaking || isListening || !currentField;
+      repeatBtn.disabled = !started || !currentField;
+      typeBtn.disabled = !started || complete || !currentField;
+
+      if (complete) {
+        botState.textContent = "Dossier complet";
+        avatar.className = "avatar";
+        saveData();
+      }
+    }
+
+    function addBubble(text, role) {
+      const el = document.createElement("div");
+      el.className = `bubble ${role}`;
+      el.textContent = text;
+      chat.appendChild(el);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    function setBotState(text, mode) {
+      botState.textContent = text;
+      avatar.className = "avatar" + (mode ? " " + mode : "");
+    }
+
+    function speak(text) {
+      return new Promise((resolve) => {
+        if (!window.speechSynthesis) { resolve(); return; }
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.lang = "fr-FR";
+        utter.rate = 0.95;
+        utter.pitch = 1;
+
+        const voices = speechSynthesis.getVoices();
+        const frVoice = voices.find((v) => v.lang.startsWith("fr"));
+        if (frVoice) utter.voice = frVoice;
+
+        isSpeaking = true;
+        setBotState("Je parle…", "speaking");
+        updateUI();
+
+        utter.onend = () => {
+          isSpeaking = false;
+          setBotState("À vous de répondre", "");
+          updateUI();
+          resolve();
+        };
+        utter.onerror = () => {
+          isSpeaking = false;
+          resolve();
+        };
+        speechSynthesis.speak(utter);
+      });
+    }
+
+    function botSay(text) {
+      addBubble(text, "bot");
+      return speak(text);
+    }
+
+    function cleanName(text) {
+      return text
+        .replace(/^(je m'appelle|c'est|mon nom est|mon prénom est)\s+/i, "")
+        .replace(/[^a-zA-ZÀ-ÿ\s-]/g, "")
+        .trim()
+        .split(/\s+/)
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+        .join(" ");
+    }
+
+    function parseDate(text) {
+      const t = text.toLowerCase()
+        .replace(/premier/g, "1")
+        .replace(/1er/g, "1")
+        .replace(/deuxième|deuxieme/g, "2")
+        .trim();
+
+      const numeric = t.match(/(\d{1,2})[\/\-\.\s](\d{1,2})[\/\-\.\s](\d{4})/);
+      if (numeric) {
+        return `${numeric[1].padStart(2, "0")}/${numeric[2].padStart(2, "0")}/${numeric[3]}`;
+      }
+
+      const words = t.match(/(\d{1,2})\s+([a-zéûôîàèêù]+)\s+(\d{4})/);
+      if (words && MOIS[words[2]]) {
+        return `${words[1].padStart(2, "0")}/${MOIS[words[2]]}/${words[3]}`;
+      }
+
+      const iso = t.match(/(\d{4})-(\d{2})-(\d{2})/);
+      if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
+
+      return null;
+    }
+
+    function validateField(fieldId, raw) {
+      const field = FIELDS.find((f) => f.id === fieldId);
+      if (!field || !raw || raw.trim().length < 2) return null;
+
+      if (field.type === "text") {
+        const val = cleanName(raw);
+        return val.length >= 2 ? val : null;
+      }
+
+      const date = parseDate(raw);
+      if (!date) return null;
+
+      const [j, m, a] = date.split("/").map(Number);
+      const d = new Date(a, m - 1, j);
+      if (d.getFullYear() !== a || d.getMonth() !== m - 1 || d.getDate() !== j) return null;
+
+      if (fieldId === "dateRetour" && data.dateDepart) {
+        const [dj, dm, da] = data.dateDepart.split("/").map(Number);
+        if (new Date(a, m - 1, j) < new Date(da, dm - 1, dj)) return null;
+      }
+
+      return date;
+    }
+
+    async function confirmAndStore(fieldId, value) {
+      const field = FIELDS.find((f) => f.id === fieldId);
+      data[fieldId] = value;
+      saveData();
+      updateUI();
+
+      const display = field.type === "date" ? formatDisplay(fieldId, value) : value;
+      const confirm = field.type === "date"
+        ? `Parfait, j'ai noté le ${display}.`
+        : `Merci, ${field.label.toLowerCase()} : ${display}. C'est bien cela.`;
+
+      await botSay(confirm);
+      addBubble(display, "user");
+    }
+
+    async function askCurrentQuestion(useClarify = false) {
+      if (!currentField) return;
+      const q = QUESTIONS[currentField];
+      const text = retryCount === 0
+        ? q.ask
+        : retryCount === 1
+          ? q.retry
+          : q.clarify;
+      await botSay(text);
+    }
+
+    async function processAnswer(raw) {
+      if (!currentField) return;
+
+      const value = validateField(currentField, raw);
+
+      if (!value) {
+        retryCount++;
+        addBubble(raw, "user");
+
+        if (retryCount >= 3) {
+          await botSay("Pas de souci, saisissons cette information par écrit. C'est tout aussi simple.");
+          showManualInput();
+          return;
+        }
+
+        const q = QUESTIONS[currentField];
+        await botSay(retryCount === 1 ? q.retry : q.clarify);
+        return;
+      }
+
+      retryCount = 0;
+      await confirmAndStore(currentField, value);
+      await nextStep();
+    }
+
+    async function nextStep() {
+      const missing = missingFields();
+      updateUI();
+
+      if (missing.length === 0) {
+        await botSay(
+          "Excellent, votre dossier est maintenant complet. Vous pouvez consulter le formulaire ou télécharger vos informations. Merci pour votre patience !"
+        );
+        setBotState("Terminé ✓", "");
+        return;
+      }
+
+      currentField = missing[0].id;
+
+      const known = FIELDS.filter((f) => data[f.id]).map((f) => f.label.toLowerCase());
+      let intro = "";
+      if (known.length > 0 && retryCount === 0) {
+        intro = `Il nous reste ${missing.length} information${missing.length > 1 ? "s" : ""}. `;
+      }
+
+      if (intro) await botSay(intro);
+      await askCurrentQuestion();
+    }
+
+    function listen() {
+      if (!hasSpeech || !currentField) return;
+
+      recognition = new SpeechRecognition();
+      recognition.lang = "fr-FR";
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => {
+        isListening = true;
+        setBotState("J'écoute…", "listening");
+        updateUI();
+      };
+
+      recognition.onresult = (e) => {
+        const transcript = e.results[0][0].transcript;
+        isListening = false;
+        setBotState("Je traite votre réponse…", "");
+        processAnswer(transcript);
+      };
+
+      recognition.onerror = (e) => {
+        isListening = false;
+        if (e.error === "no-speech") {
+          botSay("Je n'ai rien entendu. Appuyez sur « Répondre à voix haute » quand vous êtes prêt.");
+        } else if (e.error !== "aborted") {
+          botSay("Un petit souci technique. Réessayez ou répondez par écrit.");
+        }
+        setBotState("En attente de votre réponse", "");
+        updateUI();
+      };
+
+      recognition.onend = () => {
+        isListening = false;
+        updateUI();
+      };
+
+      try {
+        recognition.start();
+      } catch {
+        botSay("Impossible de démarrer le micro. Utilisez la saisie par écrit.");
+      }
+    }
+
+    function showManualInput() {
+      const field = FIELDS.find((f) => f.id === currentField);
+      manualLabel.textContent = field.type === "date"
+        ? `${field.label} (ex : 15/03/1990)`
+        : field.label;
+      manualInput.value = "";
+      manualPanel.classList.add("visible");
+      manualInput.focus();
+    }
+
+    function hideManualInput() {
+      manualPanel.classList.remove("visible");
+    }
+
+    async function startAssistant() {
+      if (!hasSpeech) {
+        techHint.textContent = "Votre navigateur ne supporte pas l'assistant vocal. Utilisez Chrome ou Edge.";
+        return;
+      }
+
+      started = true;
+      startBtn.style.display = "none";
+      updateUI();
+
+      const missing = missingFields();
+      const known = FIELDS.filter((f) => data[f.id]);
+
+      let welcome = "Bonjour ! Je suis Léa, votre assistante pour finaliser votre dossier de voyage. ";
+      if (known.length > 0) {
+        welcome += `J'ai déjà ${known.length} information${known.length > 1 ? "s" : ""} enregistrée${known.length > 1 ? "s" : ""}. `;
+      }
+      if (missing.length > 0) {
+        welcome += `Il nous reste ${missing.length} question${missing.length > 1 ? "s" : ""} à compléter ensemble. On y va ?`;
+      } else {
+        welcome += "Votre dossier semble déjà complet !";
+      }
+
+      addBubble("Session démarrée", "system");
+      await botSay(welcome);
+      await nextStep();
+    }
+
+    startBtn.addEventListener("click", startAssistant);
+    speakBtn.addEventListener("click", listen);
+    repeatBtn.addEventListener("click", () => askCurrentQuestion(true));
+    typeBtn.addEventListener("click", showManualInput);
+
+    manualSubmit.addEventListener("click", async () => {
+      const val = manualInput.value.trim();
+      if (!val) return;
+      hideManualInput();
+      await processAnswer(val);
+    });
+
+    manualCancel.addEventListener("click", hideManualInput);
+
+    manualInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") manualSubmit.click();
+    });
+
+    finishBtn.addEventListener("click", () => {
+      saveData();
+      location.href = "formulaire.html?from=assistant";
+    });
+
+    if (window.speechSynthesis) {
+      speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices();
+    }
+
+    if (!hasSpeech) {
+      startBtn.disabled = true;
+      techHint.textContent = "Assistant vocal disponible sur Chrome et Edge uniquement.";
+    }
+
+    loadInitialData();
+    updateUI();
+
+    if (filledCount() > 0 && filledCount() < FIELDS.length) {
+      addBubble(`${filledCount()} champ${filledCount() > 1 ? "s" : ""} déjà renseigné${filledCount() > 1 ? "s" : ""}`, "system");
+    }
+  </script>
+</body>
+</html>
