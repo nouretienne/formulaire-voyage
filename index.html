@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Formulaire de voyage</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    .container {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+      padding: 2.5rem;
+      width: 100%;
+      max-width: 480px;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      color: #1a1a2e;
+      margin-bottom: 0.5rem;
+    }
+
+    .subtitle {
+      color: #666;
+      font-size: 0.9rem;
+      margin-bottom: 2rem;
+    }
+
+    .field {
+      margin-bottom: 1.25rem;
+    }
+
+    label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 0.4rem;
+    }
+
+    input {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 1rem;
+      transition: border-color 0.2s;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    input.invalid {
+      border-color: #e53935;
+    }
+
+    .error-msg {
+      color: #e53935;
+      font-size: 0.8rem;
+      margin-top: 0.3rem;
+      display: none;
+    }
+
+    .error-msg.visible {
+      display: block;
+    }
+
+    button {
+      width: 100%;
+      padding: 0.9rem;
+      margin-top: 0.5rem;
+      background: #667eea;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, opacity 0.2s;
+    }
+
+    button:hover:not(:disabled) {
+      background: #5a6fd6;
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .status {
+      text-align: center;
+      margin-top: 1rem;
+      font-size: 0.85rem;
+      color: #888;
+    }
+
+    .status.complete {
+      color: #43a047;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Formulaire de voyage</h1>
+    <p class="subtitle">Remplissez tous les champs pour télécharger vos informations.</p>
+
+    <form id="form" novalidate>
+      <div class="field">
+        <label for="nom">Nom</label>
+        <input type="text" id="nom" name="nom" placeholder="Dupont" autocomplete="family-name">
+        <span class="error-msg" id="err-nom">Ce champ est requis.</span>
+      </div>
+
+      <div class="field">
+        <label for="prenom">Prénom</label>
+        <input type="text" id="prenom" name="prenom" placeholder="Jean" autocomplete="given-name">
+        <span class="error-msg" id="err-prenom">Ce champ est requis.</span>
+      </div>
+
+      <div class="field">
+        <label for="dateNaissance">Date de naissance</label>
+        <input type="date" id="dateNaissance" name="dateNaissance">
+        <span class="error-msg" id="err-dateNaissance">Ce champ est requis.</span>
+      </div>
+
+      <div class="field">
+        <label for="dateDepart">Date de départ</label>
+        <input type="date" id="dateDepart" name="dateDepart">
+        <span class="error-msg" id="err-dateDepart">Ce champ est requis.</span>
+      </div>
+
+      <div class="field">
+        <label for="dateRetour">Date de retour</label>
+        <input type="date" id="dateRetour" name="dateRetour">
+        <span class="error-msg" id="err-dateRetour">Ce champ est requis.</span>
+      </div>
+
+      <button type="button" id="downloadBtn" disabled>Télécharger les informations</button>
+    </form>
+
+    <p class="status" id="status">5 champs restants à remplir</p>
+  </div>
+
+  <script>
+    const fields = ["nom", "prenom", "dateNaissance", "dateDepart", "dateRetour"];
+    const downloadBtn = document.getElementById("downloadBtn");
+    const statusEl = document.getElementById("status");
+
+    function formatDateFr(isoDate) {
+      const [year, month, day] = isoDate.split("-");
+      return `${day}/${month}/${year}`;
+    }
+
+    function isFieldValid(id) {
+      const input = document.getElementById(id);
+      return input.value.trim() !== "";
+    }
+
+    function allFieldsValid() {
+      return fields.every(isFieldValid);
+    }
+
+    function updateUI() {
+      const filled = fields.filter(isFieldValid).length;
+      const remaining = fields.length - filled;
+
+      downloadBtn.disabled = !allFieldsValid();
+
+      if (allFieldsValid()) {
+        statusEl.textContent = "Tous les champs sont remplis — vous pouvez télécharger.";
+        statusEl.classList.add("complete");
+      } else {
+        statusEl.textContent = remaining === 1
+          ? "1 champ restant à remplir"
+          : `${remaining} champs restants à remplir`;
+        statusEl.classList.remove("complete");
+      }
+    }
+
+    fields.forEach((id) => {
+      const input = document.getElementById(id);
+      input.addEventListener("input", () => {
+        input.classList.remove("invalid");
+        document.getElementById("err-" + id).classList.remove("visible");
+        updateUI();
+      });
+    });
+
+    downloadBtn.addEventListener("click", () => {
+      let hasError = false;
+
+      fields.forEach((id) => {
+        const input = document.getElementById(id);
+        const errEl = document.getElementById("err-" + id);
+        if (!isFieldValid(id)) {
+          input.classList.add("invalid");
+          errEl.classList.add("visible");
+          hasError = true;
+        }
+      });
+
+      if (hasError) return;
+
+      const data = {
+        nom: document.getElementById("nom").value.trim(),
+        prenom: document.getElementById("prenom").value.trim(),
+        dateNaissance: formatDateFr(document.getElementById("dateNaissance").value),
+        dateDepart: formatDateFr(document.getElementById("dateDepart").value),
+        dateRetour: formatDateFr(document.getElementById("dateRetour").value),
+      };
+
+      const content = [
+        "=== Informations du formulaire ===",
+        "",
+        `Nom              : ${data.nom}`,
+        `Prénom           : ${data.prenom}`,
+        `Date de naissance: ${data.dateNaissance}`,
+        `Date de départ   : ${data.dateDepart}`,
+        `Date de retour   : ${data.dateRetour}`,
+        "",
+        `Généré le ${new Date().toLocaleString("fr-FR")}`,
+      ].join("\n");
+
+      const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${data.nom}_${data.prenom}_informations.txt`;
+      link.click();
+      URL.revokeObjectURL(url);
+    });
+
+    updateUI();
+  </script>
+</body>
+</html>
