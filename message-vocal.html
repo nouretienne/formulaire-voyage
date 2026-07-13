@@ -291,14 +291,15 @@
     <div class="field">
       <label for="engineSelect">Qualité de transcription</label>
       <select id="engineSelect">
-        <option value="local-small">Standard — Whisper Small (gratuit, recommandé)</option>
-        <option value="local-medium">Haute qualité — Whisper Medium (gratuit, ~750 Mo)</option>
-        <option value="local-base">Rapide — Whisper Base (gratuit, moindre qualité)</option>
+        <option value="browser">Instantané — navigateur (gratuit, aucun téléchargement)</option>
+        <option value="local-base">Whisper Base (~75 Mo, 1ère transcription)</option>
+        <option value="local-small">Whisper Small (~240 Mo, meilleure qualité)</option>
+        <option value="local-medium">Whisper Medium (~750 Mo, haute qualité)</option>
         <option value="wispr">Premium — Wispr Flow (clé API)</option>
         <option value="openai">Premium — OpenAI Whisper (clé API)</option>
       </select>
       <p class="field-hint" id="engineHint">
-        Whisper Small offre une bien meilleure qualité que Tiny. Le 1er chargement télécharge ~240 Mo.
+        Mode instantané : prêt immédiatement, idéal pour tester. Whisper se charge uniquement à la transcription.
       </p>
     </div>
 
@@ -357,7 +358,7 @@
     </div>
 
     <p class="warning" id="browserWarning">
-      Utilisez Chrome ou Edge. Whisper Small (~240 Mo) offre une qualité nettement supérieure.
+      La page est prête immédiatement. Utilisez le mode « Instantané » pour tester sans attente.
     </p>
   </div>
 
@@ -374,11 +375,12 @@
     };
 
     const ENGINE_HINTS = {
-      "local-base": "Whisper Base : rapide, qualité correcte (~75 Mo au 1er chargement).",
-      "local-small": "Whisper Small : bon équilibre qualité/vitesse (~240 Mo). Recommandé.",
-      "local-medium": "Whisper Medium : meilleure qualité gratuite (~750 Mo, chargement long).",
-      "wispr": "Wispr Flow : qualité professionnelle, auto-correction et ponctuation. Nécessite une clé API.",
-      "openai": "OpenAI Whisper : excellente qualité. Nécessite une clé API OpenAI (payante).",
+      "browser": "Aucun téléchargement. Transcription en direct pendant l'enregistrement (Chrome/Edge).",
+      "local-base": "Whisper Base : ~75 Mo téléchargés à la 1re transcription seulement.",
+      "local-small": "Whisper Small : ~240 Mo, meilleure qualité. Chargement à la 1re transcription.",
+      "local-medium": "Whisper Medium : ~750 Mo, haute qualité. Chargement long à la 1re transcription.",
+      "wispr": "Wispr Flow : qualité professionnelle. Nécessite une clé API.",
+      "openai": "OpenAI Whisper : excellente qualité. Nécessite une clé API OpenAI.",
     };
 
     const micSelect = document.getElementById("micSelect");
@@ -455,10 +457,15 @@
     let peakVolume = 0;
     let transcriberPromise = null;
     let loadedModelKey = null;
-    let modelReady = false;
+    let liveRecognition = null;
+    let liveTranscript = "";
 
     function isLocalEngine() {
       return engineSelect.value.startsWith("local-");
+    }
+
+    function isBrowserEngine() {
+      return engineSelect.value === "browser";
     }
 
     function needsApiKey() {
@@ -861,7 +868,6 @@
     function resetTranscriber() {
       transcriberPromise = null;
       loadedModelKey = null;
-      modelReady = false;
     }
 
     function getTranscriber() {
@@ -887,22 +893,60 @@
       return transcriberPromise;
     }
 
-    async function prepareModel() {
-      if (!isLocalEngine()) {
-        modelReady = true;
-        setProgress(100, false);
-        setStatus("Prêt — mode " + (engineSelect.value === "wispr" ? "Wispr Flow" : "OpenAI"));
-        return;
+    function stopLiveRecognition() {
+      if (liveRecognition) {
+        liveRecognition.onend = null;
+        try { liveRecognition.stop(); } catch { /* ignore */ }
+        liveRecognition = null;
       }
+    }
 
+    function startLiveRecognition() {
+      if (!SpeechRecognition) return;
+      liveTranscript = "";
+      liveRecognition = new SpeechRecognition();
+      liveRecognition.lang = "fr-FR";
+      liveRecognition.continuous = true;
+      liveRecognition.interimResults = true;
+
+      liveRecognition.onresult = (event) => {
+        let final = "";
+        let interim = "";
+        for (let i = 0; i < event.results.length; i++) {
+          const t = event.results[i][0].transcript;
+          if (event.results[i].isFinal) final += t + " ";
+          else interim += t;
+        }
+        liveTranscript = (final + interim).trim();
+        transcriptEl.value = liveTranscript;
+      };
+
+      liveRecognition.onerror = (e) => {
+        if (e.error !== "aborted" && e.error !== "no-speech") {
+          console.warn("Reconnaissance live:", e.error);
+        }
+      };
+
+      liveRecognition.onend = () => {
+        if (isRecording) {
+          try { liveRecognition.start(); } catch { /* ignore */ }
+        }
+      };
+
+      try { liveRecognition.start(); } catch { /* ignore */ }
+    }
+
+    async function prepareModel() {
+      if (isBrowserEngine() || needsApiKey()) return;
+
+      setStatus("Chargement du modèle IA (1ère fois)…");
+      setProgress(0, true);
       try {
         await getTranscriber();
-        modelReady = true;
         setProgress(100, false);
-        setStatus("Prêt — décrivez votre voyage à voix haute");
       } catch (e) {
-        setStatus("Modèle IA non chargé (connexion requise)");
-        console.error(e);
+        setProgress(100, false);
+        throw e;
       }
     }
 
@@ -1026,6 +1070,8 @@
       mediaRecorder.start(200);
       startMeter();
 
+      if (isBrowserEngine()) startLiveRecognition();
+
       micBtn.classList.add("recording");
       micBtn.textContent = "⏹";
       setStatus("Enregistrement — parlez, la barre verte doit bouger", "listening");
@@ -1105,8 +1151,8 @@
           text = await transcribeWithOpenAI(lastWavBlob);
         } else if (engine === "wispr") {
           text = await transcribeWithWispr(lastWavBlob);
-        } else {
-          if (!modelReady) await prepareModel();
+        } else if (isLocalEngine()) {
+          await prepareModel();
           text = await transcribeWithLocal(lastAudioSamples);
         }
 
@@ -1127,6 +1173,29 @@
         micBtn.disabled = false;
         updateButtons();
       }
+    }
+
+    async function finishBrowserTranscription() {
+      stopLiveRecognition();
+      isBusy = true;
+      micBtn.disabled = true;
+      setStatus("Analyse de votre message…");
+
+      const text = liveTranscript.trim();
+      transcriptEl.value = text;
+
+      if (!text) {
+        setStatus("Aucun texte reconnu");
+        warn("Parlez clairement pendant l'enregistrement. La barre verte doit bouger. Réessayez.");
+      } else {
+        setStatus("Transcription terminée ✓");
+        browserWarning.hidden = true;
+        await processTranscription(text);
+      }
+
+      isBusy = false;
+      micBtn.disabled = false;
+      updateButtons();
     }
 
     async function stopRecording() {
@@ -1163,8 +1232,13 @@
         warn("Volume faible — écoutez l'enregistrement. Si vous vous entendez, cliquez Retranscrire.");
       }
 
-      setStatus("Audio prêt (" + info.duration + "s) — cliquez ▶ pour écouter, transcription…");
-      await transcribeSamples();
+      setStatus("Audio prêt (" + info.duration + "s) — analyse en cours…");
+
+      if (isBrowserEngine()) {
+        await finishBrowserTranscription();
+      } else {
+        await transcribeSamples();
+      }
     }
 
     micBtn.addEventListener("click", async () => {
@@ -1189,7 +1263,11 @@
     });
 
     retryBtn.addEventListener("click", async () => {
-      await transcribeSamples();
+      if (isBrowserEngine() && liveTranscript.trim()) {
+        await processTranscription(liveTranscript.trim());
+      } else {
+        await transcribeSamples();
+      }
     });
     copyBtn.addEventListener("click", async () => {
       await navigator.clipboard.writeText(transcriptEl.value.trim());
@@ -1218,17 +1296,18 @@
       audioSection.classList.add("hidden");
       timerEl.classList.add("hidden");
       browserWarning.hidden = false;
-      browserWarning.textContent = "Utilisez Chrome ou Edge. Whisper Small (~240 Mo) offre une qualité nettement supérieure.";
-      setStatus(modelReady ? "Prêt — décrivez votre voyage à voix haute" : "Chargement…");
+      browserWarning.textContent = "La page est prête immédiatement. Utilisez le mode « Instantané » pour tester sans attente.";
+      setStatus("Prêt — décrivez votre voyage à voix haute");
       updateButtons();
     });
 
     engineSelect.addEventListener("change", () => {
       resetTranscriber();
+      stopLiveRecognition();
       updateEngineUI();
       localStorage.setItem("engine", engineSelect.value);
       apiKeyInput.value = localStorage.getItem("apiKey_" + engineSelect.value) || "";
-      prepareModel();
+      setStatus("Prêt — décrivez votre voyage à voix haute");
     });
 
     apiKeyInput.addEventListener("input", () => {
@@ -1243,17 +1322,23 @@
     const savedEngine = localStorage.getItem("engine");
     if (savedEngine && engineSelect.querySelector(`option[value="${savedEngine}"]`)) {
       engineSelect.value = savedEngine;
+    } else if (!SpeechRecognition) {
+      engineSelect.value = "local-base";
     }
     updateEngineUI();
     apiKeyInput.value = localStorage.getItem("apiKey_" + engineSelect.value) || "";
 
+    if (!SpeechRecognition && isBrowserEngine()) {
+      engineSelect.value = "local-base";
+      warn("Mode instantané indisponible — utilisez Chrome ou Edge, ou choisissez Whisper.");
+    }
+
+    setStatus("Prêt — décrivez votre voyage à voix haute");
     if (window.speechSynthesis) {
       speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices();
     }
-
     loadMicrophones();
     updateButtons();
-    prepareModel();
     navigator.mediaDevices?.addEventListener("devicechange", loadMicrophones);
   </script>
 </body>
