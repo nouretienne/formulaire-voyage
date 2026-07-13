@@ -94,6 +94,31 @@
       font-weight: 600;
     }
 
+    .status-line.listening {
+      color: #11998e;
+      font-weight: 600;
+    }
+
+    .live-indicator {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #ccc;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+
+    .live-indicator.on {
+      background: #e53935;
+      animation: blink 1s infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
     .timer {
       font-size: 1.5rem;
       font-weight: 700;
@@ -220,7 +245,10 @@
 
     <div class="recorder">
       <button type="button" class="mic-btn" id="micBtn" title="Démarrer l'enregistrement">🎤</button>
-      <p class="status-line" id="statusLine">Prêt à enregistrer</p>
+      <p class="status-line" id="statusLine">
+        <span class="live-indicator" id="liveIndicator"></span>
+        <span id="statusText">Prêt à enregistrer</span>
+      </p>
       <p class="timer hidden" id="timer">00:00</p>
     </div>
 
@@ -252,6 +280,8 @@
   <script>
     const micBtn = document.getElementById("micBtn");
     const statusLine = document.getElementById("statusLine");
+    const statusText = document.getElementById("statusText");
+    const liveIndicator = document.getElementById("liveIndicator");
     const timerEl = document.getElementById("timer");
     const audioSection = document.getElementById("audioSection");
     const audioPlayer = document.getElementById("audioPlayer");
@@ -264,15 +294,31 @@
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const supportsSpeech = Boolean(SpeechRecognition);
-    const supportsRecording = Boolean(navigator.mediaDevices?.getUserMedia);
-
     let mediaRecorder = null;
+    let mediaStream = null;
     let audioChunks = [];
     let recognition = null;
     let isRecording = false;
     let timerInterval = null;
+    let noSpeechTimeout = null;
     let seconds = 0;
-    let finalTranscript = "";
+
+    const ERROR_MESSAGES = {
+      "no-speech": "Aucune voix détectée. Parlez plus fort, plus près du micro.",
+      "audio-capture": "Micro inaccessible. Vérifiez qu'aucune autre app ne l'utilise.",
+      "not-allowed": "Micro refusé. Autorisez l'accès au microphone dans le navigateur.",
+      "network": "Connexion internet requise pour la transcription (Chrome/Edge).",
+      "aborted": "Transcription interrompue.",
+      "service-not-allowed": "Service de transcription non autorisé. Utilisez Chrome ou Edge.",
+    };
+
+    function setStatus(message, state) {
+      statusText.textContent = message;
+      statusLine.classList.remove("active", "listening");
+      liveIndicator.classList.remove("on");
+      if (state) statusLine.classList.add(state);
+      if (state === "active" || state === "listening") liveIndicator.classList.add("on");
+    }
 
     function formatTime(totalSeconds) {
       const m = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
@@ -292,87 +338,138 @@
       browserWarning.textContent = message;
     }
 
-    function initRecognition() {
-      if (!supportsSpeech) return null;
+    function updateTranscript(event) {
+      let interim = "";
+      let final = "";
 
-      const instance = new SpeechRecognition();
-      instance.lang = "fr-FR";
-      instance.continuous = true;
-      instance.interimResults = true;
-
-      instance.onresult = (event) => {
-        let interim = "";
-
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const text = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalTranscript += text + " ";
-          } else {
-            interim += text;
-          }
+      for (let i = 0; i < event.results.length; i++) {
+        const text = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          final += text;
+        } else {
+          interim += text;
         }
+      }
 
-        transcriptEl.value = (finalTranscript + interim).trim();
-        interimEl.textContent = interim ? `… ${interim}` : "";
-        interimEl.classList.toggle("hidden", !interim);
-        updateActionButtons();
-      };
-
-      instance.onerror = (event) => {
-        if (event.error === "no-speech") return;
-        statusLine.textContent = `Erreur de transcription : ${event.error}`;
-        statusLine.classList.remove("active");
-      };
-
-      instance.onend = () => {
-        if (isRecording) {
-          try {
-            instance.start();
-          } catch {
-            /* ignore restart race */
-          }
-        }
-      };
-
-      return instance;
+      transcriptEl.value = (final + interim).trim();
+      interimEl.textContent = interim ? `… ${interim}` : "";
+      interimEl.classList.toggle("hidden", !interim);
+      updateActionButtons();
     }
 
-    async function startRecording() {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    function startAudioRecording() {
+      if (!mediaStream || mediaRecorder) return;
 
       audioChunks = [];
-      mediaRecorder = new MediaRecorder(stream);
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+
+      try {
+        mediaRecorder = new MediaRecorder(mediaStream, { mimeType });
+      } catch {
+        mediaRecorder = new MediaRecorder(mediaStream);
+      }
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) audioChunks.push(event.data);
       };
 
       mediaRecorder.onstop = () => {
-        stream.getTracks().forEach((track) => track.stop());
-
         if (audioChunks.length > 0) {
-          const blob = new Blob(audioChunks, { type: "audio/webm" });
+          const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || "audio/webm" });
           audioPlayer.src = URL.createObjectURL(blob);
           audioSection.classList.remove("hidden");
         }
-
         updateActionButtons();
       };
 
-      mediaRecorder.start();
-      isRecording = true;
+      mediaRecorder.start(1000);
+    }
 
-      if (supportsSpeech) {
-        finalTranscript = transcriptEl.value.trim() ? transcriptEl.value.trim() + " " : "";
-        recognition = initRecognition();
-        recognition.start();
+    function stopMedia() {
+      if (mediaRecorder?.state !== "inactive") {
+        mediaRecorder.stop();
       }
+      mediaRecorder = null;
+
+      if (mediaStream) {
+        mediaStream.getTracks().forEach((track) => track.stop());
+        mediaStream = null;
+      }
+    }
+
+    function startRecognition() {
+      if (!supportsSpeech) return;
+
+      recognition = new SpeechRecognition();
+      recognition.lang = "fr-FR";
+      recognition.continuous = true;
+      recognition.interimResults = true;
+
+      recognition.onstart = () => {
+        setStatus("Écoute active — parlez maintenant.", "listening");
+      };
+
+      recognition.onaudiostart = () => {
+        clearTimeout(noSpeechTimeout);
+        setStatus("Voix détectée, transcription en cours…", "listening");
+      };
+
+      recognition.onspeechstart = () => {
+        clearTimeout(noSpeechTimeout);
+      };
+
+      recognition.onresult = (event) => {
+        clearTimeout(noSpeechTimeout);
+        updateTranscript(event);
+        setStatus("Transcription en cours…", "listening");
+      };
+
+      recognition.onerror = (event) => {
+        const message = ERROR_MESSAGES[event.error] || `Erreur : ${event.error}`;
+        if (event.error === "no-speech" && isRecording) {
+          setStatus("En écoute… parlez maintenant.", "listening");
+          return;
+        }
+        if (event.error !== "aborted") {
+          setStatus(message, "active");
+          showWarning(message);
+        }
+      };
+
+      recognition.onend = () => {
+        if (!isRecording) return;
+        try {
+          recognition.start();
+        } catch {
+          setStatus("La transcription s'est arrêtée. Cliquez sur stop puis recommencez.", "active");
+        }
+      };
+
+      recognition.start();
+
+      noSpeechTimeout = setTimeout(() => {
+        if (isRecording && !transcriptEl.value.trim()) {
+          setStatus("Aucune voix détectée — parlez plus fort près du micro.", "active");
+        }
+      }, 6000);
+    }
+
+    async function startRecording() {
+      if (!supportsSpeech) {
+        showWarning("Utilisez Google Chrome ou Microsoft Edge pour la transcription.");
+        return;
+      }
+
+      isRecording = true;
+      transcriptEl.value = "";
+      interimEl.classList.add("hidden");
 
       micBtn.classList.add("recording");
       micBtn.textContent = "⏹";
       micBtn.title = "Arrêter l'enregistrement";
-      statusLine.textContent = "Enregistrement en cours… Parlez maintenant.";
-      statusLine.classList.add("active");
+      setStatus("Demande d'accès au micro…", "active");
       timerEl.classList.remove("hidden");
 
       seconds = 0;
@@ -381,33 +478,50 @@
         seconds += 1;
         timerEl.textContent = formatTime(seconds);
       }, 1000);
+
+      startRecognition();
+
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        setTimeout(startAudioRecording, 800);
+      } catch {
+        showWarning("Enregistrement audio indisponible, mais la transcription peut fonctionner.");
+      }
     }
 
     function stopRecording() {
       isRecording = false;
-
-      if (mediaRecorder?.state !== "inactive") {
-        mediaRecorder.stop();
-      }
+      clearTimeout(noSpeechTimeout);
+      clearInterval(timerInterval);
 
       if (recognition) {
+        recognition.onend = null;
         recognition.stop();
         recognition = null;
       }
 
-      clearInterval(timerInterval);
+      stopMedia();
+
       micBtn.classList.remove("recording");
       micBtn.textContent = "🎤";
       micBtn.title = "Démarrer l'enregistrement";
-      statusLine.textContent = "Enregistrement terminé.";
-      statusLine.classList.remove("active");
       interimEl.classList.add("hidden");
+
+      if (transcriptEl.value.trim()) {
+        setStatus("Terminé — transcription disponible.");
+      } else {
+        setStatus("Terminé — aucun texte détecté.");
+        showWarning(
+          "Aucune transcription reçue. Vérifiez : Chrome ou Edge, connexion internet active, micro autorisé, et parlez clairement."
+        );
+      }
+
       updateActionButtons();
     }
 
     micBtn.addEventListener("click", async () => {
-      if (!supportsRecording) {
-        showWarning("Votre navigateur ne permet pas l'accès au microphone.");
+      if (!supportsSpeech) {
+        showWarning("La transcription nécessite Google Chrome ou Microsoft Edge.");
         return;
       }
 
@@ -419,13 +533,13 @@
       try {
         await startRecording();
       } catch {
-        showWarning("Accès au microphone refusé. Autorisez le micro dans les paramètres du navigateur.");
+        showWarning("Impossible de démarrer. Autorisez le micro et réessayez.");
       }
     });
 
     copyBtn.addEventListener("click", async () => {
       await navigator.clipboard.writeText(transcriptEl.value.trim());
-      statusLine.textContent = "Texte copié dans le presse-papiers.";
+      setStatus("Texte copié dans le presse-papiers.");
     });
 
     downloadBtn.addEventListener("click", () => {
@@ -440,27 +554,24 @@
     });
 
     clearBtn.addEventListener("click", () => {
-      finalTranscript = "";
       transcriptEl.value = "";
       interimEl.textContent = "";
       interimEl.classList.add("hidden");
       audioPlayer.removeAttribute("src");
       audioSection.classList.add("hidden");
       timerEl.classList.add("hidden");
-      statusLine.textContent = "Prêt à enregistrer";
+      setStatus("Prêt à enregistrer");
       updateActionButtons();
     });
 
-    if (!supportsRecording) {
+    if (!supportsSpeech) {
       micBtn.disabled = true;
-      showWarning("L'enregistrement vocal n'est pas supporté par ce navigateur.");
-    } else if (!supportsSpeech) {
-      showWarning(
-        "La transcription automatique nécessite Chrome ou Edge. " +
-        "L'enregistrement audio fonctionnera, mais sans conversion en texte."
-      );
+      showWarning("La transcription nécessite Google Chrome ou Microsoft Edge.");
     } else if (!window.isSecureContext) {
+      micBtn.disabled = true;
       showWarning("Le micro et la transcription nécessitent une connexion sécurisée (HTTPS).");
+    } else {
+      showWarning("Utilisez Chrome ou Edge. Une connexion internet est nécessaire pour transcrire.");
     }
 
     updateActionButtons();
