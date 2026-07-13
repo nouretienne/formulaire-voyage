@@ -127,6 +127,25 @@
       font-variant-numeric: tabular-nums;
     }
 
+    .progress-wrap {
+      margin-top: 0.75rem;
+      height: 6px;
+      background: #eee;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .progress-wrap.hidden {
+      display: none;
+    }
+
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      background: #11998e;
+      transition: width 0.2s;
+    }
+
     .section {
       margin-bottom: 1.5rem;
     }
@@ -157,11 +176,6 @@
 
     .transcript-box::placeholder {
       color: #aaa;
-    }
-
-    .interim {
-      color: #888;
-      font-style: italic;
     }
 
     audio {
@@ -239,17 +253,20 @@
   <div class="container">
     <h1>Message vocal</h1>
     <p class="subtitle">
-      Enregistrez votre voix et obtenez la transcription en texte.
-      Cliquez sur le micro pour commencer, puis recliquez pour arrêter.
+      Enregistrez votre voix, puis la transcription en texte se lance automatiquement
+      à la fin de l'enregistrement.
     </p>
 
     <div class="recorder">
       <button type="button" class="mic-btn" id="micBtn" title="Démarrer l'enregistrement">🎤</button>
       <p class="status-line" id="statusLine">
         <span class="live-indicator" id="liveIndicator"></span>
-        <span id="statusText">Prêt à enregistrer</span>
+        <span id="statusText">Préparation du moteur de transcription…</span>
       </p>
       <p class="timer hidden" id="timer">00:00</p>
+      <div class="progress-wrap hidden" id="progressWrap">
+        <div class="progress-bar" id="progressBar"></div>
+      </div>
     </div>
 
     <div class="section hidden" id="audioSection">
@@ -262,10 +279,9 @@
       <textarea
         id="transcript"
         class="transcript-box"
-        placeholder="Le texte apparaîtra ici pendant ou après l'enregistrement…"
+        placeholder="Le texte apparaîtra ici après l'enregistrement…"
         readonly
       ></textarea>
-      <p class="interim hidden" id="interimText"></p>
     </div>
 
     <div class="actions">
@@ -274,43 +290,40 @@
       <button type="button" class="action" id="clearBtn" disabled>Tout effacer</button>
     </div>
 
-    <p class="warning" id="browserWarning" hidden></p>
+    <p class="warning" id="browserWarning">
+      La première utilisation télécharge un modèle IA (~40 Mo). Une connexion internet est nécessaire.
+    </p>
   </div>
 
-  <script>
+  <script type="module">
+    import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2";
+
+    env.allowLocalModels = false;
+
     const micBtn = document.getElementById("micBtn");
     const statusLine = document.getElementById("statusLine");
     const statusText = document.getElementById("statusText");
     const liveIndicator = document.getElementById("liveIndicator");
     const timerEl = document.getElementById("timer");
+    const progressWrap = document.getElementById("progressWrap");
+    const progressBar = document.getElementById("progressBar");
     const audioSection = document.getElementById("audioSection");
     const audioPlayer = document.getElementById("audioPlayer");
     const transcriptEl = document.getElementById("transcript");
-    const interimEl = document.getElementById("interimText");
     const copyBtn = document.getElementById("copyBtn");
     const downloadBtn = document.getElementById("downloadBtn");
     const clearBtn = document.getElementById("clearBtn");
     const browserWarning = document.getElementById("browserWarning");
 
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const supportsSpeech = Boolean(SpeechRecognition);
     let mediaRecorder = null;
     let mediaStream = null;
     let audioChunks = [];
-    let recognition = null;
     let isRecording = false;
+    let isBusy = false;
     let timerInterval = null;
-    let noSpeechTimeout = null;
     let seconds = 0;
-
-    const ERROR_MESSAGES = {
-      "no-speech": "Aucune voix détectée. Parlez plus fort, plus près du micro.",
-      "audio-capture": "Micro inaccessible. Vérifiez qu'aucune autre app ne l'utilise.",
-      "not-allowed": "Micro refusé. Autorisez l'accès au microphone dans le navigateur.",
-      "network": "Connexion internet requise pour la transcription (Chrome/Edge).",
-      "aborted": "Transcription interrompue.",
-      "service-not-allowed": "Service de transcription non autorisé. Utilisez Chrome ou Edge.",
-    };
+    let transcriberPromise = null;
+    let modelReady = false;
 
     function setStatus(message, state) {
       statusText.textContent = message;
@@ -318,6 +331,11 @@
       liveIndicator.classList.remove("on");
       if (state) statusLine.classList.add(state);
       if (state === "active" || state === "listening") liveIndicator.classList.add("on");
+    }
+
+    function setProgress(percent, visible) {
+      progressWrap.classList.toggle("hidden", !visible);
+      progressBar.style.width = `${Math.min(100, Math.max(0, percent))}%`;
     }
 
     function formatTime(totalSeconds) {
@@ -338,29 +356,53 @@
       browserWarning.textContent = message;
     }
 
-    function updateTranscript(event) {
-      let interim = "";
-      let final = "";
-
-      for (let i = 0; i < event.results.length; i++) {
-        const text = event.results[i][0].transcript;
-        if (event.results[i].isFinal) {
-          final += text;
-        } else {
-          interim += text;
-        }
+    function getTranscriber() {
+      if (!transcriberPromise) {
+        transcriberPromise = pipeline(
+          "automatic-speech-recognition",
+          "Xenova/whisper-tiny",
+          {
+            progress_callback: (data) => {
+              if (data.status === "progress") {
+                const percent = Math.round(data.progress || 0);
+                setProgress(percent, true);
+                setStatus(`Chargement du modèle IA : ${percent}%`);
+              }
+            },
+          }
+        );
       }
-
-      transcriptEl.value = (final + interim).trim();
-      interimEl.textContent = interim ? `… ${interim}` : "";
-      interimEl.classList.toggle("hidden", !interim);
-      updateActionButtons();
+      return transcriberPromise;
     }
 
-    function startAudioRecording() {
-      if (!mediaStream || mediaRecorder) return;
+    async function prepareModel() {
+      micBtn.disabled = true;
+      try {
+        await getTranscriber();
+        modelReady = true;
+        setProgress(100, false);
+        setStatus("Prêt à enregistrer");
+        micBtn.disabled = false;
+      } catch (error) {
+        setStatus("Erreur de chargement du modèle.");
+        showWarning(
+          "Impossible de charger le moteur de transcription. Vérifiez votre connexion internet et rechargez la page."
+        );
+        console.error(error);
+      }
+    }
 
+    async function startRecording() {
+      if (!modelReady || isBusy) return;
+
+      transcriptEl.value = "";
+      audioPlayer.removeAttribute("src");
+      audioSection.classList.add("hidden");
+      updateActionButtons();
+
+      mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioChunks = [];
+
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
         ? "audio/webm;codecs=opus"
         : "audio/webm";
@@ -375,101 +417,13 @@
         if (event.data.size > 0) audioChunks.push(event.data);
       };
 
-      mediaRecorder.onstop = () => {
-        if (audioChunks.length > 0) {
-          const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || "audio/webm" });
-          audioPlayer.src = URL.createObjectURL(blob);
-          audioSection.classList.remove("hidden");
-        }
-        updateActionButtons();
-      };
-
-      mediaRecorder.start(1000);
-    }
-
-    function stopMedia() {
-      if (mediaRecorder?.state !== "inactive") {
-        mediaRecorder.stop();
-      }
-      mediaRecorder = null;
-
-      if (mediaStream) {
-        mediaStream.getTracks().forEach((track) => track.stop());
-        mediaStream = null;
-      }
-    }
-
-    function startRecognition() {
-      if (!supportsSpeech) return;
-
-      recognition = new SpeechRecognition();
-      recognition.lang = "fr-FR";
-      recognition.continuous = true;
-      recognition.interimResults = true;
-
-      recognition.onstart = () => {
-        setStatus("Écoute active — parlez maintenant.", "listening");
-      };
-
-      recognition.onaudiostart = () => {
-        clearTimeout(noSpeechTimeout);
-        setStatus("Voix détectée, transcription en cours…", "listening");
-      };
-
-      recognition.onspeechstart = () => {
-        clearTimeout(noSpeechTimeout);
-      };
-
-      recognition.onresult = (event) => {
-        clearTimeout(noSpeechTimeout);
-        updateTranscript(event);
-        setStatus("Transcription en cours…", "listening");
-      };
-
-      recognition.onerror = (event) => {
-        const message = ERROR_MESSAGES[event.error] || `Erreur : ${event.error}`;
-        if (event.error === "no-speech" && isRecording) {
-          setStatus("En écoute… parlez maintenant.", "listening");
-          return;
-        }
-        if (event.error !== "aborted") {
-          setStatus(message, "active");
-          showWarning(message);
-        }
-      };
-
-      recognition.onend = () => {
-        if (!isRecording) return;
-        try {
-          recognition.start();
-        } catch {
-          setStatus("La transcription s'est arrêtée. Cliquez sur stop puis recommencez.", "active");
-        }
-      };
-
-      recognition.start();
-
-      noSpeechTimeout = setTimeout(() => {
-        if (isRecording && !transcriptEl.value.trim()) {
-          setStatus("Aucune voix détectée — parlez plus fort près du micro.", "active");
-        }
-      }, 6000);
-    }
-
-    async function startRecording() {
-      if (!supportsSpeech) {
-        showWarning("Utilisez Google Chrome ou Microsoft Edge pour la transcription.");
-        return;
-      }
-
+      mediaRecorder.start(500);
       isRecording = true;
-      transcriptEl.value = "";
-      interimEl.classList.add("hidden");
 
       micBtn.classList.add("recording");
       micBtn.textContent = "⏹";
-      micBtn.title = "Arrêter l'enregistrement";
-      setStatus("Demande d'accès au micro…", "active");
+      micBtn.title = "Arrêter et transcrire";
+      setStatus("Enregistrement en cours — parlez maintenant.", "listening");
       timerEl.classList.remove("hidden");
 
       seconds = 0;
@@ -478,62 +432,120 @@
         seconds += 1;
         timerEl.textContent = formatTime(seconds);
       }, 1000);
+    }
 
-      startRecognition();
+    function stopMediaCapture() {
+      return new Promise((resolve) => {
+        if (!mediaRecorder || mediaRecorder.state === "inactive") {
+          if (mediaStream) {
+            mediaStream.getTracks().forEach((track) => track.stop());
+            mediaStream = null;
+          }
+          resolve(null);
+          return;
+        }
+
+        mediaRecorder.onstop = () => {
+          let blob = null;
+          if (audioChunks.length > 0) {
+            blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+            audioPlayer.src = URL.createObjectURL(blob);
+            audioSection.classList.remove("hidden");
+          }
+
+          if (mediaStream) {
+            mediaStream.getTracks().forEach((track) => track.stop());
+            mediaStream = null;
+          }
+
+          mediaRecorder = null;
+          resolve(blob);
+        };
+
+        mediaRecorder.stop();
+      });
+    }
+
+    async function transcribeAudio(blob) {
+      isBusy = true;
+      micBtn.disabled = true;
+      setStatus("Transcription en cours…", "listening");
+      setProgress(0, true);
 
       try {
-        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        setTimeout(startAudioRecording, 800);
-      } catch {
-        showWarning("Enregistrement audio indisponible, mais la transcription peut fonctionner.");
+        const transcriber = await getTranscriber();
+        const audioUrl = URL.createObjectURL(blob);
+
+        const result = await transcriber(audioUrl, {
+          language: "french",
+          task: "transcribe",
+          chunk_length_s: 30,
+          stride_length_s: 5,
+        });
+
+        URL.revokeObjectURL(audioUrl);
+
+        const text = (result.text || "").trim();
+        transcriptEl.value = text;
+        updateActionButtons();
+
+        if (text) {
+          setStatus("Transcription terminée.");
+          browserWarning.hidden = true;
+        } else {
+          setStatus("Aucun texte détecté dans l'enregistrement.");
+          showWarning(
+            "L'audio a été enregistré mais aucune parole n'a été reconnue. Parlez plus fort et plus longtemps (10–15 secondes)."
+          );
+        }
+      } catch (error) {
+        setStatus("Erreur pendant la transcription.");
+        showWarning("La transcription a échoué. Réessayez ou rechargez la page.");
+        console.error(error);
+      } finally {
+        setProgress(100, false);
+        isBusy = false;
+        micBtn.disabled = !modelReady;
       }
     }
 
-    function stopRecording() {
+    async function stopRecording() {
       isRecording = false;
-      clearTimeout(noSpeechTimeout);
       clearInterval(timerInterval);
-
-      if (recognition) {
-        recognition.onend = null;
-        recognition.stop();
-        recognition = null;
-      }
-
-      stopMedia();
 
       micBtn.classList.remove("recording");
       micBtn.textContent = "🎤";
       micBtn.title = "Démarrer l'enregistrement";
-      interimEl.classList.add("hidden");
 
-      if (transcriptEl.value.trim()) {
-        setStatus("Terminé — transcription disponible.");
-      } else {
-        setStatus("Terminé — aucun texte détecté.");
-        showWarning(
-          "Aucune transcription reçue. Vérifiez : Chrome ou Edge, connexion internet active, micro autorisé, et parlez clairement."
-        );
-      }
+      const blob = await stopMediaCapture();
 
-      updateActionButtons();
-    }
-
-    micBtn.addEventListener("click", async () => {
-      if (!supportsSpeech) {
-        showWarning("La transcription nécessite Google Chrome ou Microsoft Edge.");
+      if (!blob || blob.size === 0) {
+        setStatus("Aucun audio enregistré.");
+        showWarning("Aucun son capturé. Vérifiez que le micro est autorisé et fonctionne.");
         return;
       }
 
+      if (seconds < 2) {
+        setStatus("Enregistrement trop court.");
+        showWarning("Parlez au moins 3–5 secondes pour une bonne transcription.");
+      }
+
+      await transcribeAudio(blob);
+    }
+
+    micBtn.addEventListener("click", async () => {
+      if (!modelReady || isBusy) return;
+
       if (isRecording) {
-        stopRecording();
+        await stopRecording();
         return;
       }
 
       try {
         await startRecording();
       } catch {
-        showWarning("Impossible de démarrer. Autorisez le micro et réessayez.");
+        setStatus("Micro refusé.");
+        showWarning("Autorisez l'accès au microphone dans les paramètres du navigateur.");
       }
     });
 
@@ -555,26 +567,26 @@
 
     clearBtn.addEventListener("click", () => {
       transcriptEl.value = "";
-      interimEl.textContent = "";
-      interimEl.classList.add("hidden");
       audioPlayer.removeAttribute("src");
       audioSection.classList.add("hidden");
       timerEl.classList.add("hidden");
-      setStatus("Prêt à enregistrer");
+      browserWarning.hidden = false;
+      browserWarning.textContent =
+        "La première utilisation télécharge un modèle IA (~40 Mo). Une connexion internet est nécessaire.";
+      setStatus(modelReady ? "Prêt à enregistrer" : "Préparation du moteur de transcription…");
       updateActionButtons();
     });
 
-    if (!supportsSpeech) {
+    if (!navigator.mediaDevices?.getUserMedia) {
       micBtn.disabled = true;
-      showWarning("La transcription nécessite Google Chrome ou Microsoft Edge.");
+      showWarning("Votre navigateur ne supporte pas l'enregistrement vocal.");
     } else if (!window.isSecureContext) {
       micBtn.disabled = true;
-      showWarning("Le micro et la transcription nécessitent une connexion sécurisée (HTTPS).");
-    } else {
-      showWarning("Utilisez Chrome ou Edge. Une connexion internet est nécessaire pour transcrire.");
+      showWarning("Le micro nécessite une connexion sécurisée (HTTPS).");
     }
 
     updateActionButtons();
+    prepareModel();
   </script>
 </body>
 </html>
