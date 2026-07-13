@@ -211,13 +211,74 @@
     }
 
     .hidden { display: none; }
+
+    .dossier-grid { display: grid; gap: 0.5rem; }
+
+    .dossier-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.6rem 0.8rem;
+      border-radius: 8px;
+      font-size: 0.88rem;
+      border: 1px solid #eee;
+      background: #fafafa;
+    }
+
+    .dossier-row.ok { background: #f1f8f2; border-color: #c8e6c9; }
+    .dossier-row.missing { background: #fffaf2; border-color: #ffe0b2; }
+
+    .dossier-label { font-weight: 600; color: #555; }
+    .dossier-value { color: #1a1a2e; text-align: right; max-width: 55%; }
+    .dossier-value.empty { color: #bbb; font-style: italic; }
+
+    .followup-box {
+      margin-top: 1rem;
+      padding: 1rem;
+      background: #f4f5ff;
+      border-radius: 10px;
+      border: 1px solid #e0e4ff;
+    }
+
+    .followup-box p {
+      font-size: 0.88rem;
+      color: #444;
+      line-height: 1.5;
+      margin-bottom: 0.75rem;
+    }
+
+    #answerBtn {
+      background: #667eea;
+      color: white;
+      width: 100%;
+      padding: 0.85rem;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    #answerBtn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    #finishFormBtn {
+      background: #43a047;
+      color: white;
+      grid-column: 1 / -1;
+    }
+
+    .container { max-width: 600px; }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>Message vocal</h1>
+    <h1>Dossier de voyage vocal</h1>
     <p class="subtitle">
-      Choisissez votre micro, enregistrez, puis écoutez et transcrivez automatiquement.
+      Décrivez votre voyage à voix haute en une seule prise. Nous extrairons automatiquement
+      vos informations pour remplir le formulaire. S'il manque des détails, une voix vous
+      posera les questions nécessaires.
+    </p>
+    <p class="field-hint" style="margin-bottom:1rem">
+      Exemple : « Je m'appelle Patrick Dupont, je suis né le 22 août 1988,
+      je souhaite partir en vacances le 22 août 2026. »
     </p>
 
     <div class="field">
@@ -277,10 +338,21 @@
         placeholder="Le texte apparaîtra ici après l'enregistrement…" readonly></textarea>
     </div>
 
+    <div class="section hidden" id="dossierSection">
+      <p class="section-title">Informations extraites pour le formulaire</p>
+      <div class="dossier-grid" id="dossierGrid"></div>
+    </div>
+
+    <div class="followup-box hidden" id="followupBox">
+      <p id="followupText">Complétons les informations manquantes…</p>
+      <button type="button" id="answerBtn" disabled>Répondre à la question</button>
+    </div>
+
     <div class="actions">
       <button type="button" class="action" id="copyBtn" disabled>Copier le texte</button>
       <button type="button" class="action" id="downloadBtn" disabled>Télécharger</button>
       <button type="button" class="action" id="retryBtn" disabled>Retranscrire</button>
+      <button type="button" class="action" id="finishFormBtn" disabled>Voir le formulaire →</button>
       <button type="button" class="action" id="clearBtn" disabled>Tout effacer</button>
     </div>
 
@@ -329,7 +401,45 @@
     const downloadBtn = document.getElementById("downloadBtn");
     const retryBtn = document.getElementById("retryBtn");
     const clearBtn = document.getElementById("clearBtn");
+    const finishFormBtn = document.getElementById("finishFormBtn");
+    const dossierSection = document.getElementById("dossierSection");
+    const dossierGrid = document.getElementById("dossierGrid");
+    const followupBox = document.getElementById("followupBox");
+    const followupText = document.getElementById("followupText");
+    const answerBtn = document.getElementById("answerBtn");
     const browserWarning = document.getElementById("browserWarning");
+
+    const STORAGE_KEY = "voyageFormData";
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const hasVoiceQA = Boolean(SpeechRecognition && window.speechSynthesis);
+
+    const FORM_FIELDS = [
+      { id: "nom", label: "Nom", type: "text" },
+      { id: "prenom", label: "Prénom", type: "text" },
+      { id: "dateNaissance", label: "Date de naissance", type: "date" },
+      { id: "dateDepart", label: "Date de départ", type: "date" },
+      { id: "dateRetour", label: "Date de retour", type: "date" },
+    ];
+
+    const FOLLOWUP_QUESTIONS = {
+      nom: "Quel est votre nom de famille ?",
+      prenom: "Quel est votre prénom ?",
+      dateNaissance: "Quelle est votre date de naissance ?",
+      dateDepart: "À quelle date partez-vous ?",
+      dateRetour: "Quelle est la date de votre retour ?",
+    };
+
+    const MOIS = {
+      janvier: "01", fevrier: "02", février: "02", mars: "03", avril: "04",
+      mai: "05", juin: "06", juillet: "07", aout: "08", août: "08",
+      septembre: "09", octobre: "10", novembre: "11", decembre: "12", décembre: "12",
+    };
+
+    const formData = {};
+    let followUpField = null;
+    let followUpRecognition = null;
+    let isFollowUpActive = false;
+    let isSpeaking = false;
 
     let mediaStream = null;
     let mediaRecorder = null;
@@ -392,10 +502,242 @@
     function updateButtons() {
       const hasText = transcriptEl.value.trim().length > 0;
       const hasAudio = Boolean(audioPlayer.src);
+      const complete = FORM_FIELDS.every((f) => formData[f.id]);
       copyBtn.disabled = !hasText;
       downloadBtn.disabled = !hasText;
-      retryBtn.disabled = (!lastAudioSamples && !lastWavBlob) || isBusy;
-      clearBtn.disabled = !hasText && !hasAudio;
+      retryBtn.disabled = (!lastAudioSamples && !lastWavBlob) || isBusy || isFollowUpActive;
+      clearBtn.disabled = !hasText && !hasAudio && !complete;
+      finishFormBtn.disabled = !complete;
+      micBtn.disabled = isBusy || isFollowUpActive;
+    }
+
+    function saveFormData() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(formData));
+    }
+
+    function formatDateDisplay(value) {
+      if (!value) return "Manquant";
+      const m = value.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (!m) return value;
+      const months = ["jan.", "fév.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
+      return `${parseInt(m[1], 10)} ${months[parseInt(m[2], 10) - 1]} ${m[3]}`;
+    }
+
+    function renderDossier() {
+      dossierSection.classList.remove("hidden");
+      dossierGrid.innerHTML = FORM_FIELDS.map((f) => {
+        const val = formData[f.id];
+        return `<div class="dossier-row ${val ? "ok" : "missing"}">
+          <span class="dossier-label">${f.label}</span>
+          <span class="dossier-value ${val ? "" : "empty"}">${
+            f.type === "date" ? formatDateDisplay(val) : (val || "Manquant")
+          }</span>
+        </div>`;
+      }).join("");
+      updateButtons();
+    }
+
+    function missingFields() {
+      return FORM_FIELDS.filter((f) => !formData[f.id]);
+    }
+
+    function capitalizeName(s) {
+      return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+    }
+
+    function parseDate(str) {
+      const t = str.toLowerCase().replace(/premier/g, "1").replace(/1er/g, "1").trim();
+      const num = t.match(/(\d{1,2})[\/\-\.\s](\d{1,2})[\/\-\.\s](\d{4})/);
+      if (num) return `${num[1].padStart(2, "0")}/${num[2].padStart(2, "0")}/${num[3]}`;
+      const wrd = t.match(/(\d{1,2})\s+([a-zéûôîàèêù]+)\s+(\d{4})/);
+      if (wrd && MOIS[wrd[2]]) return `${wrd[1].padStart(2, "0")}/${MOIS[wrd[2]]}/${wrd[3]}`;
+      return null;
+    }
+
+    function extractFromTranscript(text) {
+      const extracted = {};
+      const norm = text.replace(/['']/g, "'").replace(/\s+/g, " ").trim();
+      const lower = norm.toLowerCase();
+
+      const nameMatch = norm.match(
+        /(?:je m'appelle|mon nom est)\s+([A-Za-zÀ-ÿ\-]+)\s+([A-Za-zÀ-ÿ\-]+)/i
+      );
+      if (nameMatch) {
+        extracted.prenom = capitalizeName(nameMatch[1]);
+        extracted.nom = capitalizeName(nameMatch[2]);
+      }
+
+      const birthMatch = lower.match(
+        /(?:je suis n[eé]e?|n[eé]e?)\s+(?:le\s+)?(\d{1,2}\s+[a-zéûôîàèêù]+\s+\d{4}|\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4})/
+      );
+      if (birthMatch) extracted.dateNaissance = parseDate(birthMatch[1]);
+
+      const departMatch = lower.match(
+        /(?:partir|d[eé]part|vacances|souhaite partir)(?:[^.\d]{0,50}?)(?:le\s+)?(\d{1,2}\s+[a-zéûôîàèêù]+\s+\d{4}|\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4})/
+      );
+      if (departMatch) extracted.dateDepart = parseDate(departMatch[1]);
+
+      const retourMatch = lower.match(
+        /(?:retour|revenir|rentrer)(?:[^.\d]{0,50}?)(?:le\s+)?(\d{1,2}\s+[a-zéûôîàèêù]+\s+\d{4}|\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4})/
+      );
+      if (retourMatch) extracted.dateRetour = parseDate(retourMatch[1]);
+
+      return extracted;
+    }
+
+    function validateAnswer(fieldId, raw) {
+      const field = FORM_FIELDS.find((f) => f.id === fieldId);
+      if (!field || !raw || raw.trim().length < 2) return null;
+
+      if (field.type === "text") {
+        const val = raw.replace(/^(je m'appelle|c'est|mon nom est|mon prénom est)\s+/i, "")
+          .replace(/[^a-zA-ZÀ-ÿ\s\-]/g, "").trim();
+        const parts = val.split(/\s+/).filter(Boolean);
+        if (fieldId === "nom" || fieldId === "prenom") {
+          const word = parts.length > 1
+            ? (fieldId === "prenom" ? parts[0] : parts[parts.length - 1])
+            : parts[0];
+          return word && word.length >= 2 ? capitalizeName(word) : null;
+        }
+      }
+
+      const date = parseDate(raw);
+      if (!date) return null;
+
+      if (fieldId === "dateRetour" && formData.dateDepart) {
+        const [dj, dm, da] = formData.dateDepart.split("/").map(Number);
+        const [rj, rm, ra] = date.split("/").map(Number);
+        if (new Date(ra, rm - 1, rj) < new Date(da, dm - 1, dj)) return null;
+      }
+      return date;
+    }
+
+    function mergeExtracted(extracted) {
+      Object.entries(extracted).forEach(([key, val]) => {
+        if (val && !formData[key]) formData[key] = val;
+      });
+      saveFormData();
+      renderDossier();
+    }
+
+    function speak(text) {
+      return new Promise((resolve) => {
+        if (!window.speechSynthesis) { resolve(); return; }
+        speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.lang = "fr-FR";
+        utter.rate = 0.92;
+        const voices = speechSynthesis.getVoices();
+        const fr = voices.find((v) => v.lang.startsWith("fr"));
+        if (fr) utter.voice = fr;
+        isSpeaking = true;
+        answerBtn.disabled = true;
+        utter.onend = () => { isSpeaking = false; updateButtons(); resolve(); };
+        utter.onerror = () => { isSpeaking = false; updateButtons(); resolve(); };
+        speechSynthesis.speak(utter);
+      });
+    }
+
+    function listenForAnswer() {
+      if (!hasVoiceQA || !followUpField) return;
+
+      followUpRecognition = new SpeechRecognition();
+      followUpRecognition.lang = "fr-FR";
+      followUpRecognition.interimResults = false;
+
+      followUpRecognition.onstart = () => {
+        setStatus("J'écoute votre réponse…", "listening");
+        answerBtn.disabled = true;
+      };
+
+      followUpRecognition.onresult = async (e) => {
+        const answer = e.results[0][0].transcript;
+        const value = validateAnswer(followUpField, answer);
+
+        if (!value) {
+          await speak("Je n'ai pas bien compris. " + FOLLOWUP_QUESTIONS[followUpField]);
+          listenForAnswer();
+          return;
+        }
+
+        formData[followUpField] = value;
+        saveFormData();
+        renderDossier();
+        await speak("Merci, c'est noté.");
+        await startFollowUp();
+      };
+
+      followUpRecognition.onerror = async (e) => {
+        if (e.error === "no-speech") {
+          setStatus("Je n'ai rien entendu — réessayez");
+          answerBtn.disabled = false;
+        } else {
+          await speak("Un souci technique. Appuyez sur Répondre à la question.");
+          answerBtn.disabled = false;
+        }
+      };
+
+      followUpRecognition.onend = () => {
+        if (isFollowUpActive && !isSpeaking) answerBtn.disabled = false;
+      };
+
+      try { followUpRecognition.start(); } catch { answerBtn.disabled = false; }
+    }
+
+    async function askForField(fieldId) {
+      followUpField = fieldId;
+      const question = FOLLOWUP_QUESTIONS[fieldId];
+      followupBox.classList.remove("hidden");
+      followupText.textContent = "Il manque une information : " + question;
+      setStatus("Question vocale en cours…", "listening");
+      await speak(question);
+      setStatus("À vous de répondre");
+      answerBtn.disabled = false;
+      listenForAnswer();
+    }
+
+    async function startFollowUp() {
+      const missing = missingFields();
+      if (missing.length === 0) {
+        isFollowUpActive = false;
+        followupBox.classList.add("hidden");
+        await speak("Parfait, toutes les informations sont complètes. Vous pouvez consulter le formulaire.");
+        setStatus("Dossier complet ✓");
+        updateButtons();
+        return;
+      }
+
+      isFollowUpActive = true;
+      await askForField(missing[0].id);
+    }
+
+    async function processTranscription(text) {
+      Object.keys(formData).forEach((k) => delete formData[k]);
+      const extracted = extractFromTranscript(text);
+      mergeExtracted(extracted);
+
+      const found = Object.keys(extracted).length;
+      const missing = missingFields();
+
+      if (missing.length === 0) {
+        setStatus("Toutes les informations ont été extraites ✓");
+        await speak("J'ai bien extrait toutes vos informations. Votre dossier est complet.");
+        return;
+      }
+
+      if (found > 0) {
+        setStatus(`${found} info(s) extraite(s) — ${missing.length} manquante(s)`);
+        await speak(
+          `J'ai extrait ${found} information${found > 1 ? "s" : ""} de votre message. ` +
+          `Il manque encore ${missing.length} information${missing.length > 1 ? "s" : ""}.`
+        );
+      } else {
+        setStatus("Extraction partielle — complétons ensemble");
+        await speak("Je n'ai pas pu tout extraire automatiquement. Je vais vous poser quelques questions.");
+      }
+
+      if (hasVoiceQA) await startFollowUp();
+      else warn("Activez Chrome ou Edge pour les questions vocales automatiques.");
     }
 
     function warn(msg) {
@@ -557,7 +899,7 @@
         await getTranscriber();
         modelReady = true;
         setProgress(100, false);
-        setStatus("Prêt — parlez après avoir cliqué sur le micro");
+        setStatus("Prêt — décrivez votre voyage à voix haute");
       } catch (e) {
         setStatus("Modèle IA non chargé (connexion requise)");
         console.error(e);
@@ -641,6 +983,11 @@
 
       transcriptEl.value = "";
       lastAudioSamples = null;
+      lastWavBlob = null;
+      Object.keys(formData).forEach((k) => delete formData[k]);
+      isFollowUpActive = false;
+      followupBox.classList.add("hidden");
+      dossierSection.classList.add("hidden");
       peakVolume = 0;
       if (audioPlayer.src) URL.revokeObjectURL(audioPlayer.src);
       audioPlayer.removeAttribute("src");
@@ -765,8 +1112,12 @@
 
         transcriptEl.value = text;
         setStatus(text ? "Transcription terminée ✓" : "Aucun texte reconnu");
-        if (!text) warn("Écoutez l'enregistrement ci-dessus. Si vous entendez votre voix, cliquez Retranscrire.");
-        else browserWarning.hidden = true;
+        if (!text) {
+          warn("Écoutez l'enregistrement ci-dessus. Si vous entendez votre voix, cliquez Retranscrire.");
+        } else {
+          browserWarning.hidden = true;
+          await processTranscription(text);
+        }
       } catch (e) {
         setStatus("Erreur de transcription");
         warn("Erreur : " + (e.message || "inconnue") + ". Cliquez Retranscrire.");
@@ -827,7 +1178,19 @@
       }
     });
 
-    retryBtn.addEventListener("click", () => transcribeSamples());
+    answerBtn.addEventListener("click", () => {
+      if (!followUpField || isSpeaking) return;
+      listenForAnswer();
+    });
+
+    finishFormBtn.addEventListener("click", () => {
+      saveFormData();
+      location.href = "formulaire.html?from=assistant";
+    });
+
+    retryBtn.addEventListener("click", async () => {
+      await transcribeSamples();
+    });
     copyBtn.addEventListener("click", async () => {
       await navigator.clipboard.writeText(transcriptEl.value.trim());
       setStatus("Texte copié");
@@ -842,13 +1205,21 @@
     clearBtn.addEventListener("click", () => {
       transcriptEl.value = "";
       lastAudioSamples = null;
+      lastWavBlob = null;
+      Object.keys(formData).forEach((k) => delete formData[k]);
+      localStorage.removeItem(STORAGE_KEY);
+      isFollowUpActive = false;
+      followUpField = null;
+      followupBox.classList.add("hidden");
+      dossierSection.classList.add("hidden");
+      if (followUpRecognition) try { followUpRecognition.stop(); } catch { /* ignore */ }
       if (audioPlayer.src) URL.revokeObjectURL(audioPlayer.src);
       audioPlayer.removeAttribute("src");
       audioSection.classList.add("hidden");
       timerEl.classList.add("hidden");
       browserWarning.hidden = false;
       browserWarning.textContent = "Utilisez Chrome ou Edge. Whisper Small (~240 Mo) offre une qualité nettement supérieure.";
-      setStatus(modelReady ? "Prêt — parlez après avoir cliqué sur le micro" : "Chargement…");
+      setStatus(modelReady ? "Prêt — décrivez votre voyage à voix haute" : "Chargement…");
       updateButtons();
     });
 
@@ -875,6 +1246,10 @@
     }
     updateEngineUI();
     apiKeyInput.value = localStorage.getItem("apiKey_" + engineSelect.value) || "";
+
+    if (window.speechSynthesis) {
+      speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices();
+    }
 
     loadMicrophones();
     updateButtons();
