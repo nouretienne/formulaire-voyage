@@ -709,6 +709,9 @@
       return date;
     }
 
+    const DATE_IN_TEXT =
+      String.raw`(\d{1,2}\s+[a-zéûôîàèêù]+\s+\d{4}|\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4})`;
+
     function extractFromTranscript(text) {
       const extracted = {};
       const norm = text.replace(/['']/g, "'").replace(/\s+/g, " ").trim();
@@ -723,19 +726,20 @@
       }
 
       const birthMatch = lower.match(
-        /(?:je suis n[eé]e?|n[eé]e?)\s+(?:le\s+)?(\d{1,2}\s+[a-zéûôîàèêù]+\s+\d{4}|\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4})/
+        new RegExp(String.raw`(?:je suis n[eé]e?|n[eé]e?)\s+(?:le\s+)?${DATE_IN_TEXT}`)
       );
       if (birthMatch) extracted.dateNaissance = parseDate(birthMatch[1]);
 
-      const departMatch = lower.match(
-        /(?:partir|d[eé]part|vacances|souhaite partir)(?:[^.\d]{0,50}?)(?:le\s+)?(\d{1,2}\s+[a-zéûôîàèêù]+\s+\d{4}|\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4})/
-      );
-      if (departMatch) extracted.dateDepart = parseDate(departMatch[1]);
-
+      // Retour avant départ : « reviens de vacances » ne doit pas être pris pour un départ
       const retourMatch = lower.match(
-        /(?:retour|revenir|rentrer)(?:[^.\d]{0,50}?)(?:le\s+)?(\d{1,2}\s+[a-zéûôîàèêù]+\s+\d{4}|\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4})/
+        new RegExp(String.raw`(?:(?:date\s+de\s+)?retour|(?:je\s+)?(?:reviens|revient|revenir|rentre|rentrer|rentrons|rentrerai|revenons))(?:\s+de\s+vacances)?[^.\d]{0,40}?(?:le\s+)?${DATE_IN_TEXT}`)
       );
       if (retourMatch) extracted.dateRetour = parseDate(retourMatch[1]);
+
+      const departMatch = lower.match(
+        new RegExp(String.raw`(?:(?:date\s+de\s+)?d[eé]part|partir\s+en\s+vacances|pars\s+en\s+vacances|souhaite\s+partir|(?:je\s+)?(?:pars|partir|partirai|partons))[^.\d]{0,40}?(?:le\s+)?${DATE_IN_TEXT}`)
+      );
+      if (departMatch) extracted.dateDepart = parseDate(departMatch[1]);
 
       return extracted;
     }
